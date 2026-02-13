@@ -17,7 +17,7 @@ meteo-notes/
 - [Forecast Verification: Methods and Key Concepts](verification/forecast-verification-notes.md) — Comprehensive notes on verification metrics for dichotomous, multi-category, continuous, and probabilistic forecasts. Covers spatial verification, ensemble diagnostics, and rare event methods.
 
 ### Models
-*Coming soon*
+- [WRF Model: Complete Guide](models/wrf-model-guide.md) — End-to-end WRF workflow from downloading GRIB data (RDA/NCEP) through WPS preprocessing, model execution, physics configuration, to post-processing and visualization with Python.
 
 ### Observations
 *Coming soon*
