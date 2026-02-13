@@ -97,7 +97,15 @@ Three programs sharing `namelist.wps`, run in sequence: **geogrid** -> **ungrib*
 
 **Output:** `geo_em.d01.nc`, `geo_em.d02.nc`, etc.
 
-**Prerequisite:** Download static geographical data (~29 GB full resolution) from NCAR.
+**Prerequisite:** Download static geographical data from [www2.mmm.ucar.edu/wrf/users/download/get_sources_wps_geog.html](https://www2.mmm.ucar.edu/wrf/users/download/get_sources_wps_geog.html):
+
+| Dataset | Size | Description |
+|---|---|---|
+| Full resolution (highest_res) | ~29 GB | All resolutions down to 30-arc-second. Required for dx < ~10 km. |
+| Default (recommended minimum) | ~11 GB | Standard resolutions. Sufficient for most simulations. |
+| Minimal (lowest_res) | ~400 MB | Low-resolution only. For quick tests or very coarse grids. |
+
+Extract into a directory (e.g., `/data/WPS_GEOG/`) and set `geog_data_path` in `namelist.wps` to point to it. The directory should contain subdirectories like `albedo_ncep/`, `greenfrac/`, `landuse_30s/`, etc.
 
 **Key config (`&geogrid`):**
 ```
@@ -143,7 +151,8 @@ ln -sf ungrib/Variable_Tables/Vtable.GFS Vtable
 
 **For ERA5** — run ungrib twice:
 ```bash
-# Pressure levels
+# Pressure levels (use Vtable.ERA-interim.pl — works for both ERA-Interim and ERA5 from RDA)
+# If downloading ERA5 directly from CDS in a different GRIB layout, use Vtable.ECMWF instead
 ln -sf Vtable.ERA-interim.pl Vtable
 # set prefix = 'PRES' in namelist.wps
 ./ungrib.exe
@@ -220,6 +229,47 @@ Then in metgrid: `fg_name = './PRES', './SFC'`
 /
 ```
 
+### Verifying WPS Output
+
+Always inspect WPS output files before running `real.exe`. Catching problems here saves hours of debugging later.
+
+**Check domain placement (geo_em files):**
+```python
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as crs
+import cartopy.feature as cfeature
+
+ds = xr.open_dataset("geo_em.d01.nc")
+hgt = ds["HGT_M"].squeeze()
+
+fig, ax = plt.subplots(subplot_kw={"projection": crs.PlateCarree()})
+ax.pcolormesh(ds.XLONG_M.squeeze(), ds.XLAT_M.squeeze(), hgt, transform=crs.PlateCarree())
+ax.coastlines()
+ax.add_feature(cfeature.BORDERS)
+plt.title("Domain 1 Terrain")
+plt.savefig("domain_check.png")
+```
+
+**Inspect file contents:**
+```bash
+ncdump -h geo_em.d01.nc | head -40        # Check dimensions and variables
+ncdump -h met_em.d01.*.nc | head -40      # Check met data dimensions
+
+# Verify number of levels (needed for namelist.input)
+ncdump -h met_em.d01.2024-01-15_00:00:00.nc | grep "num_metgrid_levels"
+```
+
+**What to verify:**
+
+| File | Check | Common Issue |
+|---|---|---|
+| `geo_em.d0*.nc` | Domain covers area of interest, terrain looks correct, land-water mask reasonable | Wrong `ref_lat`/`ref_lon`, missing high-res terrain data |
+| `FILE:*` | All expected time steps present | Missing GRIB files, wrong Vtable |
+| `met_em.d0*.nc` | All time steps exist, variables present (T, U, V, RH, soil), no NaN patches | Wrong Vtable, missing surface/pressure data for ERA5 |
+
+> **Tip:** `ncview` (if installed) provides quick interactive browsing of NetCDF files — useful for spotting data gaps, incorrect land masks, or missing fields.
+
 ---
 
 ## 4. Running WRF
@@ -283,8 +333,8 @@ tail rsl.out.0000   # Should show: "SUCCESS COMPLETE WRF"
  e_vert                   = 45,  45,
  dzstretch_s              = 1.1,
  p_top_requested          = 5000,
- num_metgrid_levels       = 34,
- num_metgrid_soil_levels  = 4,
+ num_metgrid_levels       = 34,       ! MUST match met_em files: ncdump -h met_em* | grep num
+ num_metgrid_soil_levels  = 4,        ! MUST match met_em files (GFS=4, ERA5=4, NAM=4)
  dx                       = 15000, 5000,
  dy                       = 15000, 5000,
  grid_id                  = 1, 2,
@@ -316,7 +366,7 @@ time_step (seconds) = 6 x dx (km)
  use_adaptive_time_step = .true.,
  step_to_output_time    = .true.,
  target_cfl             = 1.2,
- max_step_increase_pct  = 5, 51,
+ max_step_increase_pct  = 5, 51,    ! Conservative for parent (5%), aggressive for nest (51%)
 ```
 
 ### Domain Nesting: 1-way vs 2-way
@@ -394,7 +444,7 @@ WRF uses **terrain-following eta (η) levels** where η=1 at the surface and η=
 | Parameter | Default | Description |
 |---|---|---|
 | `e_vert` | 45 | Total number of vertical levels (all domains must match) |
-| `p_top_requested` | 5000 (Pa) | Model top pressure. 5000 Pa ≈ 50 km. Use 1000–2000 Pa for stratospheric studies. |
+| `p_top_requested` | 5000 (Pa) | Model top pressure. 5000 Pa = 50 hPa ≈ **20 km**. Use 1000–2000 Pa (10–20 hPa ≈ 26–31 km) for stratospheric studies. |
 | `dzstretch_s` | 1.1 | Stretching factor near surface. Lower = more levels in PBL. |
 | `dzstretch_d` | 1.1 | Stretching factor aloft. |
 | `auto_levels_opt` | 2 | Level generation algorithm. 2 = improved (v4.1+). |
@@ -468,7 +518,7 @@ Lateral boundary conditions (LBCs) feed external data into the outermost domain.
 | ERA5 (1-hourly) | 3600 | Better for rapid weather changes. |
 | GFS forecast (3-hourly) | 10800 | Good temporal resolution. |
 
-> **Important:** Coarse temporal LBC updates (e.g., 6-hourly) can cause boundary artifacts — sudden jumps in wind/temperature every 6 hours that propagate inward. If you see periodic noise near boundaries, increase `interval_seconds` by using higher-frequency input data, or increase `spec_bdy_width`.
+> **Important:** Coarse temporal LBC updates (e.g., 6-hourly) can cause boundary artifacts — sudden jumps in wind/temperature every 6 hours that propagate inward. If you see periodic noise near boundaries, decrease `interval_seconds` by using higher-frequency input data (e.g., 3600 instead of 21600), or increase `spec_bdy_width`.
 
 ### Restart & Cycling Runs
 
@@ -562,6 +612,226 @@ ncdump -h wrflowinp_d01 | grep SST
 | LAI | Leaf area index |
 
 > **Tip:** For tropical cyclone simulations, SST update is essential — storm-induced cooling from ocean mixing can reduce TC intensity by 20–50%. Consider coupling with an ocean model (WRF-Hydro or POM) for full feedback.
+
+### Moving Nests
+
+WRF supports nests that move during the simulation — essential for tracking tropical cyclones or following specific weather features.
+
+**Types of moving nests:**
+
+| Type | Configure Option | Description |
+|---|---|---|
+| **Prescribed moves** | Nesting option 2 | Nest moves at pre-specified times and directions (set in `namelist.input`). User defines when and where the nest moves based on expected storm track. |
+| **Vortex-following** | Nesting option 3 | Nest automatically tracks a vortex (pressure minimum). The model detects the center and repositions the nest each time step. Used for tropical cyclone simulations. |
+
+**Prescribed move configuration:**
+```
+&domains
+ num_moves        = 3,                    ! Total number of moves across all nests
+ move_id          = 2, 2, 2,             ! Which domain moves (always a nest, not d01)
+ move_interval    = 60, 120, 180,        ! Minutes from start when each move occurs
+ move_cd_x        = 1, 1, -1,           ! Grid points to move in x (+ = east)
+ move_cd_y        = 1, 0, 1,            ! Grid points to move in y (+ = north)
+/
+```
+
+**Vortex-following configuration:**
+```
+&domains
+ vortex_interval  = 15, 15,             ! How often to check vortex position (minutes)
+ max_vortex_speed = 40, 40,             ! Max expected storm speed (m/s)
+ corral_dist      = 8, 8,               ! Min grid points from parent boundary
+/
+```
+
+> **Requirements:** Moving nests require WRF compiled with nesting option 2 (prescribed) or 3 (vortex-following) during `./configure`. Use **1-way nesting** (`feedback = 0`) for moving nests — 2-way feedback with moving nests can cause artifacts at nest boundaries.
+
+### ndown.exe — One-Way Nesting (Separate Runs)
+
+`ndown.exe` is an alternative to concurrent (inline) nesting. Instead of running parent and child domains simultaneously, you:
+
+1. Run the coarse domain first
+2. Use `ndown.exe` to generate initial/boundary conditions for the fine domain from the coarse output
+3. Run the fine domain separately
+
+**When to use ndown.exe:**
+- Resolution ratios > 5:1 (avoids sudden grid jumps)
+- When you want to test different physics on the inner domain
+- Memory-constrained systems (run each domain separately)
+- Post-hoc nesting (decide to add a nest after the coarse run is complete)
+
+**Workflow:**
+```bash
+# 1. Run coarse domain
+mpirun -np 32 ./wrf.exe                     # Produces wrfout_d01_*
+
+# 2. Prepare fine-domain met_em files via WPS (same grid as intended d02)
+
+# 3. Run ndown.exe
+#    - Set io_form_auxinput2 = 2 in namelist.input
+#    - Link wrfout_d01 files as input
+mpirun -np 1 ./ndown.exe                    # Produces wrfinput_d02 + wrfbdy_d02
+
+# 4. Rename and run fine domain as d01
+mv wrfinput_d02 wrfinput_d01
+mv wrfbdy_d02 wrfbdy_d01
+#    - Update namelist.input: max_dom=1, dx/dy/e_we/e_sn for fine grid
+mpirun -np 64 ./wrf.exe
+```
+
+### Idealized Simulations
+
+WRF includes pre-configured idealized test cases for theoretical studies, LES, and model verification. These use `ideal.exe` instead of `real.exe` and don't require WPS or external data.
+
+**Common idealized cases:**
+
+| Case | `./compile` Target | Description |
+|---|---|---|
+| `em_quarter_ss` | `compile em_quarter_ss` | Quarter-circle shear supercell. Classic test for microphysics and convection. |
+| `em_squall2d_x` | `compile em_squall2d_x` | 2D squall line. Tests cold pool dynamics and convective organization. |
+| `em_les` | `compile em_les` | Large Eddy Simulation. Dry or moist convective boundary layer. Requires `km_opt=2` (TKE closure). |
+| `em_seabreeze2d_x` | `compile em_seabreeze2d_x` | 2D sea breeze circulation. Tests land-sea contrast forcing. |
+| `em_b_wave` | `compile em_b_wave` | Baroclinic wave. Global-scale test for synoptic dynamics. |
+| `em_hill2d_x` | `compile em_hill2d_x` | Flow over a 2D mountain. Tests terrain-forced gravity waves. |
+| `em_fire` | `compile em_fire` | Wildfire spread (WRF-Fire). Tests atmosphere-fire coupling. |
+
+**Setting up an idealized case:**
+```bash
+# 1. Compile the idealized case
+./compile em_quarter_ss >& compile.log
+
+# 2. Go to test directory
+cd test/em_quarter_ss
+
+# 3. Edit namelist.input and input_sounding as needed
+
+# 4. Run ideal.exe (serial only)
+./ideal.exe             # Produces wrfinput_d01
+
+# 5. Run wrf.exe
+mpirun -np 8 ./wrf.exe  # Produces wrfout_d01_*
+```
+
+**`input_sounding` format:**
+```
+ surface_pressure(hPa)  surface_theta(K)  surface_qv(g/kg)
+ height(m)  theta(K)  qv(g/kg)  u(m/s)  v(m/s)
+ height(m)  theta(K)  qv(g/kg)  u(m/s)  v(m/s)
+ ...
+```
+
+> **Note:** Each idealized case has its own `input_sounding` and namelist requirements. Check the `test/em_*/README` files for case-specific instructions.
+
+### FDDA — Nudging / Four-Dimensional Data Assimilation
+
+FDDA continuously nudges the WRF solution toward external data **during** the forecast, not just at initialization. This is fundamentally different from WRF-DA (which improves initial conditions only). FDDA is essential for regional climate downscaling, reanalysis-driven runs, and situations where you need the large-scale pattern to stay anchored to reality.
+
+#### Grid (Analysis) Nudging
+
+Nudges the 3D model fields toward a gridded analysis (from `met_em` files or `wrffdda_d0*` files) by adding a relaxation term to the tendency equations.
+
+```
+&fdda
+ grid_fdda          = 1, 1,            ! Turn on grid nudging (per domain)
+ gfdda_inname       = "wrffdda_d<domain>",
+ gfdda_interval_m   = 360, 360,        ! Analysis input interval (minutes)
+ gfdda_end_h        = 9999, 9999,      ! End time for nudging (hours; 9999 = always on)
+ fgdt               = 0, 0,            ! Calculation frequency (0 = every time step)
+
+ ! Nudging coefficients (s⁻¹) — controls strength of nudging
+ guv                = 0.0003, 0.0003,  ! Wind (U, V)
+ gt                 = 0.0003, 0.0003,  ! Temperature
+ gq                 = 0.0001, 0.0001,  ! Water vapor (use weaker or 0)
+
+ ! Vertical control
+ if_no_pbl_nudging_uv = 1, 1,          ! Do NOT nudge winds inside PBL (recommended)
+ if_no_pbl_nudging_t  = 1, 1,          ! Do NOT nudge temperature inside PBL
+ if_no_pbl_nudging_q  = 1, 1,          ! Do NOT nudge moisture inside PBL
+ if_zfac_uv          = 1, 1,           ! Use ramp function (smooth transition at PBL top)
+ k_zfac_uv           = 10, 10,         ! Ramp over this many levels above PBL
+
+ ! Surface (2D) nudging only
+ if_ramping           = 0,             ! 1 = ramp down nudging toward end of simulation
+ dtramp_min           = 60.,           ! Ramp-down period (minutes before gfdda_end_h)
+/
+```
+
+**Preparing nudging input:**
+```bash
+# real.exe generates wrffdda_d01 automatically when grid_fdda = 1
+# It reads from the same met_em files used for initialization
+# Ensure met_em files span the entire simulation period
+```
+
+**Nudging coefficient guidelines:**
+
+| Coefficient | Typical Range | Notes |
+|---|---|---|
+| `guv` (wind) | 0.0001–0.0003 s⁻¹ | ~1–3 hr relaxation timescale. Strongest nudging. |
+| `gt` (temperature) | 0.0001–0.0003 s⁻¹ | Same range as wind. |
+| `gq` (moisture) | 0–0.0001 s⁻¹ | Use weaker or zero — moisture nudging can suppress convection. |
+
+> **Critical:** Always set `if_no_pbl_nudging_* = 1` to avoid nudging inside the boundary layer. PBL nudging suppresses the model's own surface layer development, producing unrealistic surface temperatures and winds.
+
+#### Spectral Nudging
+
+Nudges only the **large-scale** (long-wavelength) components of the solution while allowing the model to freely develop its own mesoscale features. Ideal for regional climate downscaling where you want the synoptic pattern from the driving reanalysis but need WRF to generate its own convection, local circulations, and terrain-forced flows.
+
+```
+&fdda
+ grid_fdda          = 2, 0,            ! 2 = spectral nudging (outer domain only)
+ fgdt               = 0, 0,
+ guv                = 0.0003, 0.,
+ gt                 = 0.0003, 0.,
+ gq                 = 0.0001, 0.,
+ if_no_pbl_nudging_uv = 1, 1,
+ if_no_pbl_nudging_t  = 1, 1,
+ if_no_pbl_nudging_q  = 1, 1,
+
+ ! Spectral control — wave numbers to nudge
+ xwavenum           = 3, 0,            ! Nudge only wavenumber ≤ 3 in x-direction
+ ywavenum           = 3, 0,            ! Nudge only wavenumber ≤ 3 in y-direction
+/
+```
+
+- `xwavenum` / `ywavenum` control the maximum wavenumber nudged. Lower values = only the largest scales. Typically 2–5.
+- Only apply spectral nudging to the outermost domain — let nested domains develop freely.
+
+#### Observation Nudging
+
+Nudges model fields toward **individual point observations** (stations, radiosondes, aircraft) within a specified radius and time window. Each observation has localized influence.
+
+```
+&fdda
+ obs_nudge_opt      = 1, 1,            ! Turn on observation nudging
+ max_obs            = 150000,          ! Max observations in memory
+ fdda_start         = 0, 0,
+ fdda_end           = 99999, 99999,
+ obs_nudge_wind     = 1, 1,
+ obs_nudge_temp     = 1, 1,
+ obs_nudge_mois     = 1, 1,
+ obs_coef_wind      = 6.0e-4, 6.0e-4,
+ obs_coef_temp      = 6.0e-4, 6.0e-4,
+ obs_coef_mois      = 6.0e-4, 6.0e-4,
+ obs_rinxy          = 240., 240.,      ! Horizontal radius of influence (km)
+ obs_rinsig         = 0.01, 0.01,      ! Vertical radius (in sigma)
+ obs_twindo         = 0.6667, 0.6667,  ! Half time-window (hours)
+ obs_npfi           = 10, 10,          ! Frequency of diagnostic prints
+/
+```
+
+**Observation input:** Requires `OBS_DOMAIN101` (and `102`, etc.) files in a specific fixed-format text file. Generate using `obsgrid.exe` from WPS or custom preprocessing.
+
+#### Which Nudging Method to Use?
+
+| Method | Best For | Anchors To |
+|---|---|---|
+| **Grid nudging** | Hindcast simulations, keeping synoptic pattern correct, extending spin-up benefits | Gridded analysis (GFS, ERA5) |
+| **Spectral nudging** | Regional climate downscaling (months–years), preserving large-scale while allowing mesoscale freedom | Large-scale waves from reanalysis |
+| **Observation nudging** | Assimilating local surface/upper-air observations, improving local accuracy where dense obs exist | Point observations |
+| **No nudging** | Free forecasts, sensitivity studies, idealized experiments | Nothing (pure forecast) |
+
+> **Common mistake:** Applying grid nudging to inner nests. This over-constrains the solution and defeats the purpose of high resolution. Typically: nudge the outermost domain only, let nests run free.
 
 ---
 
@@ -676,7 +946,7 @@ Urban physics parameterizations represent the effects of buildings, streets, and
 &physics
  sf_urban_physics   = 1, 1,          ! UCM option
  use_wudapt_lcz     = 1,             ! Use WUDAPT Local Climate Zones (v4.3+)
- num_urban_layers   = 1040,          ! Number of urban layers (BEP/BEM only)
+ num_urban_layers   = 140,           ! Number of vertical urban layers (BEP/BEM only)
 /
 ```
 
@@ -708,6 +978,29 @@ Simple ocean mixed-layer models that provide SST feedback without requiring a fu
 
 > **When to use:** Primarily for tropical cyclone studies lasting > 48 hours, where SST cooling by 1–3°C under the storm eye significantly reduces intensity. For runs over land-dominated domains, keep `sf_ocean_physics = 0`.
 
+### Lake Model (`sf_lake_physics`)
+
+Parameterizes the thermal structure and surface fluxes of inland lakes that are resolved on the model grid but too small for an ocean model. Important for lake-effect precipitation (e.g., Great Lakes, Lake Baikal) and accurate local temperatures near large water bodies.
+
+| Value | Scheme | Description |
+|---|---|---|
+| 0 | **None** (default) | Lakes treated as water points by the land surface model (constant depth, simple bulk formula). Adequate if lakes are not the focus. |
+| 1 | **CLM 1D Lake Model** | Hostetler-based 1D lake model (from CLM). Solves the lake energy balance with 10 water layers and up to 5 snow/ice layers. Prognostic lake temperature profile — captures seasonal stratification, ice formation/breakup, and diurnal surface temperature cycle. |
+
+**Key settings:**
+```
+&physics
+ sf_lake_physics    = 1,
+ lakedepth_default  = 50.,          ! Default lake depth (m) when no bathymetry data available
+ lake_min_elev      = 0.,           ! Minimum elevation for lake identification
+ use_lakedepth      = 1,            ! 1 = use lake depth from WPS geo_em files
+/
+```
+
+**Lake depth data:** WPS includes a global lake depth dataset (from GLOBathy/Kourzeneva). It is automatically included in `geo_em` files when the lake model is compiled. For specific lakes, you can provide custom bathymetry.
+
+> **When to use:** Enable for domains containing significant lakes (area > ~10 grid cells) where lake-effect weather or nearby surface temperatures matter. Especially important for Great Lakes (US/Canada), African Great Lakes, Caspian Sea, Lake Baikal, and Scandinavian lakes.
+
 ### Gravity Wave Drag (`gwd_opt`)
 
 Parameterizes the drag on the large-scale flow caused by sub-grid terrain-generated gravity waves that propagate vertically and break aloft. Important at coarser resolutions where individual mountain features are not resolved.
@@ -728,6 +1021,58 @@ Parameterizes the drag on the large-scale flow caused by sub-grid terrain-genera
  gwd_opt = 1,
 /
 ```
+
+### Lightning Parameterization (`lightning_option`)
+
+WRF can diagnose lightning flash rates based on convective and microphysical properties. Useful for severe weather diagnosis and as input for WRF-Chem (lightning-produced NOx).
+
+| Value | Scheme | Description |
+|---|---|---|
+| 0 | **None** (default) | No lightning diagnostics. |
+| 1 | **PR92 (Price & Rind)** | Flash rate based on cloud-top height. Simple, low cost. Distinguishes cloud-to-ground (CG) and intra-cloud (IC) flashes. |
+| 2 | **PR92 + LNOx** | Same as option 1 but also produces lightning NOx for WRF-Chem. |
+| 3 | **Deierling (ice flux)** | Flash rate based on upward ice mass flux and ice-ice collision rates. More physically based than PR92. Requires double-moment microphysics. |
+| 11 | **PR92 w/ user threshold** | PR92 with user-specified convective depth threshold. |
+
+**Configuration:**
+```
+&physics
+ lightning_option    = 1, 0,          ! Per domain
+ lightning_dt        = 0.,            ! Interval (s); 0 = every time step
+ flashrate_factor    = 1.0,           ! Scaling factor for flash rates
+ iccg_method         = 2,             ! IC:CG ratio method (2 = Boccippio)
+ cellcount_method    = 0,             ! 0 = model reflectivity threshold
+/
+```
+
+**Output variables:** `LTG1_MAX` (max flash rate), `LTG2_MAX`, `LTG3_MAX`, `IC_FLASHRATE`, `CG_FLASHRATE`
+
+### Convective Grey Zone (4–10 km Resolution)
+
+The "grey zone" or "terra incognita" is the resolution range (~4–10 km) where convective cells are partially resolved by the grid but not fully explicit. This creates a fundamental problem: **double counting** — both the grid and the cumulus scheme attempt to represent the same convective motions.
+
+**The problem:**
+- At dx > ~20 km: convection is entirely sub-grid → cumulus parameterization works well
+- At dx < ~4 km: convection is explicitly resolved → no cumulus scheme needed
+- At dx 4–10 km: the model partially resolves convection, but cumulus schemes were designed for fully sub-grid convection → unrealistic behavior (too much/too little rain, wrong timing, artifacts)
+
+**Strategies:**
+
+| Approach | How | Pros / Cons |
+|---|---|---|
+| **Scale-aware cumulus** (recommended) | Use `cu_physics = 3` (Grell-Freitas) | Automatically reduces contribution as resolution increases. Smoothest transition. |
+| **Avoid the grey zone** | Jump from dx > 10 km directly to dx < 4 km using nesting ratio 3:1 | Clean separation, but requires nesting. |
+| **No cumulus in grey zone** | Set `cu_physics = 0` for the grey-zone domain | Works if microphysics is robust, but may underpredict convective rain in some regimes. |
+| **Hybrid approach** | Use cumulus on outer domain, off on inner, with scale-aware in between | Most control, but complex configuration. |
+
+**Per-domain cumulus configuration example (15 km / 5 km / 1.67 km):**
+```
+&physics
+ cu_physics = 1, 3, 0,      ! KF on 15km, Grell-Freitas (scale-aware) on 5km, OFF on 1.67km
+/
+```
+
+> **Key point:** If verification shows a suspicious precipitation spike or double-peaked rainfall structure at your grey-zone domain, cumulus double counting is the likely culprit. Switch to Grell-Freitas or turn off cumulus for that domain.
 
 ### Land Use / Land Cover Datasets
 
@@ -1139,6 +1484,123 @@ ds = xr.open_dataset("wrfout_d01_2024-01-15_00:00:00").xwrf.postprocess()
 | **VAPOR** | Interactive 3D visualization from NCAR. Imports wrfout directly. |
 | **GrADS** | Via ARWpost converter. |
 | **UPP** | NCEP's Unified Post Processor. Outputs GRIB2 for operational use. |
+| **MET** | Model Evaluation Tools (NCAR/DTC). Comprehensive verification suite — computes RMSE, bias, ETS, FSS, and more against observations/analyses. Essential for publication-quality model evaluation. |
+
+### Wind Rotation: Grid-Relative to Earth-Relative
+
+**This is a common source of error.** WRF output winds (U, V, U10, V10) are in **grid-relative** coordinates aligned with the model's map projection — NOT geographic north/east. For any comparison with observations or for proper vector plotting, you must rotate them.
+
+**Using wrf-python (recommended):**
+```python
+from wrf import getvar
+
+# These are already earth-relative (wrf-python handles rotation)
+ua = getvar(ncfile, "ua")       # Earth-relative U (m/s)
+va = getvar(ncfile, "va")       # Earth-relative V (m/s)
+wspd, wdir = getvar(ncfile, "wspd_wdir")  # Speed and direction
+
+# If you read U10, V10 directly from netCDF4, they are GRID-RELATIVE
+# Use uvmet10 for earth-relative 10-m winds:
+u10_e, v10_e = getvar(ncfile, "uvmet10")
+```
+
+**Manual rotation (if not using wrf-python):**
+```python
+import numpy as np
+from netCDF4 import Dataset
+
+nc = Dataset("wrfout_d01_2024-01-15_00:00:00")
+u10 = nc.variables["U10"][0]    # Grid-relative
+v10 = nc.variables["V10"][0]
+cosalpha = nc.variables["COSALPHA"][0]
+sinalpha = nc.variables["SINALPHA"][0]
+
+# Rotate to earth-relative
+u10_earth = u10 * cosalpha - v10 * sinalpha
+v10_earth = u10 * sinalpha + v10 * cosalpha
+```
+
+> **Rule of thumb:** If you're using Lambert Conformal or Polar Stereographic projections, rotation is always needed. For Mercator (east-west aligned), the correction is typically small. Always use earth-relative winds for verification against observations.
+
+### Precipitation Handling
+
+WRF outputs **accumulated** precipitation from the start of the simulation — NOT hourly or instantaneous rates. Computing rainfall for specific intervals requires differencing.
+
+**Default precipitation variables:**
+
+| Variable | Description |
+|---|---|
+| `RAINC` | Accumulated convective precipitation (from cumulus scheme, mm) |
+| `RAINNC` | Accumulated grid-scale precipitation (from microphysics, mm) |
+| `RAINSH` | Accumulated shallow convective precipitation (mm) |
+| `SNOWNC` | Accumulated grid-scale snow/ice (mm water equivalent) |
+| `GRAUPELNC` | Accumulated grid-scale graupel (mm water equivalent) |
+
+**Computing hourly precipitation:**
+```python
+import xarray as xr
+
+ds = xr.open_mfdataset("wrfout_d01_*", concat_dim="Time", combine="nested")
+total_precip = ds["RAINC"] + ds["RAINNC"]
+
+# Hourly precipitation = difference between consecutive output times
+hourly_precip = total_precip.diff(dim="Time")
+```
+
+**Precipitation buckets (`prec_acc_dt`):**
+
+WRF can automatically reset accumulation at fixed intervals, making interval precipitation easier to compute directly:
+```
+&physics
+ prec_acc_dt = 60,       ! Reset bucket every 60 minutes
+/
+```
+
+This creates additional variables:
+- `PREC_ACC_C` — convective precip accumulated over last `prec_acc_dt` minutes
+- `PREC_ACC_NC` — grid-scale precip accumulated over last `prec_acc_dt` minutes
+
+> **Common mistake:** Comparing raw `RAINC + RAINNC` values between two times that span a restart boundary. Accumulated fields **reset to zero** at restart. If your simulation uses restarts, track the restart times and handle the reset when computing precipitation intervals.
+
+### Time Series Output (`tslist`)
+
+WRF can output high-frequency (every timestep) time series at specified lat/lon points **without** writing full 3D wrfout files at that frequency. This is extremely useful for station verification and avoids reading massive output files.
+
+**Setup:**
+
+1. Create a file named `tslist` in the WRF run directory:
+```
+# 24 characters for name, 5 for id, then lat lon
+# Name must be exactly 25 chars (padded with spaces), ID exactly 5 chars
+Jakarta_Observatory       JKOBS -6.171  106.845
+Surabaya_Airport          WARR  -7.380  112.787
+Denpasar_Ngurah_Rai       WADD  -8.748  115.167
+```
+
+2. Enable in `namelist.input`:
+```
+&time_control
+ ts_buf_size     = 200,          ! Buffer size (number of time steps before write)
+ max_ts_locs     = 20,           ! Maximum number of time series locations
+/
+```
+
+**Output files:** For each location, WRF creates `<name>.d<domain>.TS` containing:
+- Time, grid indices, T2, Q2, U10, V10, PSFC, GLW, GSW, HFX, LH, TSK, RAINC, RAINNC, and more
+- One line per model timestep (not just output interval!) — can be sub-minute frequency
+
+**Reading tslist output:**
+```python
+import pandas as pd
+
+# Skip the header line, columns are space-separated
+ts = pd.read_csv("Jakarta_Observatory.d01.TS", skiprows=1, delim_whitespace=True,
+                  names=["id", "ts_hour", "id_tsloc", "ix", "iy", "t", "q", "u", "v",
+                         "psfc", "glw", "gsw", "hfx", "lh", "tsk", "tslp", "rainc",
+                         "rainnc", "clw"])
+```
+
+> **Advantage over wrfout:** tslist writes every integration time step (e.g., every 60 seconds for a 10-km run), while wrfout typically writes every 30–60 minutes. This captures the full temporal variability needed for diurnal cycle analysis, turbulence spectra, or comparison with high-frequency automatic weather stations.
 
 ---
 
@@ -1342,7 +1804,7 @@ Based on JMA's operational choices, here is a recommended WRF setup for the regi
  dx               = 15000, 5000, 1667,     ! 15 km -> 5 km -> ~1.7 km
  dy               = 15000, 5000, 1667,
  e_vert           = 76,    76,   76,        ! High vertical resolution (JMA MSM uses 96)
- p_top_requested  = 1000,                   ! ~50 km model top (similar to MSM's 37.5 km)
+ p_top_requested  = 1000,                   ! 10 hPa ≈ 31 km model top (similar to MSM's 37.5 km)
  parent_grid_ratio = 1, 3, 3,
  parent_time_step_ratio = 1, 3, 3,
 /
@@ -1429,6 +1891,61 @@ JMA uses hybrid 4D-Var for their global model and 4D-Var for their mesoscale mod
 
 > NetCDF-C and NetCDF-Fortran must be compiled with the **same compiler** as WRF.
 
+### Library Installation Recipe (GNU/gfortran)
+
+Build order matters — each library depends on the previous ones. All must use the **same compiler**.
+
+```bash
+# Set a common install prefix and compiler
+export DIR=/usr/local/wrf-libs
+export CC=gcc
+export CXX=g++
+export FC=gfortran
+export F77=gfortran
+
+# 1. zlib
+cd zlib-1.3.1
+./configure --prefix=$DIR
+make -j4 && make install
+
+# 2. libpng
+cd ../libpng-1.6.43
+./configure --prefix=$DIR LDFLAGS="-L$DIR/lib" CPPFLAGS="-I$DIR/include"
+make -j4 && make install
+
+# 3. JasPer (only needed for WPS GRIB2; WPS 4.4+ can build internally)
+cd ../jasper-1.900.29
+./configure --prefix=$DIR
+make -j4 && make install
+
+# 4. HDF5 (with Fortran support)
+cd ../hdf5-1.14.3
+./configure --prefix=$DIR --with-zlib=$DIR --enable-fortran --enable-hl
+make -j4 && make install
+
+# 5. NetCDF-C
+cd ../netcdf-c-4.9.2
+CPPFLAGS="-I$DIR/include" LDFLAGS="-L$DIR/lib"
+./configure --prefix=$DIR --disable-dap
+make -j4 && make install
+
+# 6. NetCDF-Fortran (must find NetCDF-C first)
+cd ../netcdf-fortran-4.6.1
+CPPFLAGS="-I$DIR/include" LDFLAGS="-L$DIR/lib" LD_LIBRARY_PATH="$DIR/lib:$LD_LIBRARY_PATH"
+./configure --prefix=$DIR
+make -j4 && make install
+
+# Set environment for WRF
+export NETCDF=$DIR
+export HDF5=$DIR
+export JASPERLIB=$DIR/lib
+export JASPERINC=$DIR/include
+export PATH=$DIR/bin:$PATH
+export LD_LIBRARY_PATH=$DIR/lib:$LD_LIBRARY_PATH
+```
+
+> **Shortcut:** On Ubuntu/Debian, `sudo apt install libnetcdf-dev libnetcdff-dev libhdf5-dev libpng-dev libjasper-dev mpich` installs all dependencies. On CentOS/RHEL, use EPEL + `yum`. On HPC systems, use `module load` for pre-built libraries. Only build from source if system packages are missing or compiler-mismatched.
+
 ### Environment Variables
 
 ```bash
@@ -1452,11 +1969,26 @@ export LD_LIBRARY_PATH=$NETCDF/lib:$HDF5/lib:$LD_LIBRARY_PATH
 
 ### Build Process (v4.7)
 
+**Parallelism options:**
+
+| Option | Flag | Description | When to Use |
+|---|---|---|---|
+| **serial** | — | Single processor. No MPI or OpenMP. | Testing, compilation verification only. |
+| **smpar** | OpenMP | Shared-memory parallelism (threads). Single node only. | Small runs on multi-core desktops. |
+| **dmpar** | MPI | Distributed-memory parallelism. Multi-node. | **Most common choice.** Works on desktops, clusters, and HPC. |
+| **dm+sm** | MPI + OpenMP | Hybrid. MPI across nodes, OpenMP within nodes. | Large HPC runs where hybrid improves memory efficiency. |
+
+> **Recommendation:** Use **dmpar** (MPI only) unless you have a specific reason for hybrid. It is the most tested and most portable option.
+
 ```bash
 # 1. Configure WRF
 cd WRF
-./configure       # Select compiler + parallelism (e.g., GNU dmpar)
-                  # Select nesting (1=basic, 2=prescribed moves, 3=vortex-following)
+./configure
+# The menu shows numbered options grouped by compiler and parallelism.
+# Example: for GNU (gfortran/gcc) with dmpar, look for a line like:
+#   34.  (serial)   35.  (smpar)   36.  (dmpar)   37.  (dm+sm)   GNU (gfortran/gcc)
+# Enter the dmpar number (e.g., 36)
+# Then select nesting: 1=basic, 2=prescribed moves, 3=vortex-following
 
 # 2. Compile
 ./compile em_real >& compile.log &
@@ -1470,9 +2002,85 @@ export WRF_DIR=../WRF
 # 4. Compile WPS
 ./compile >& compile.log &
 # Verify: ls -l geogrid.exe ungrib.exe metgrid.exe
+
+# 5. (Optional) Run a test case to verify compilation
+cd ../WRF/test/em_b_wave
+mpirun -np 4 ./ideal.exe && mpirun -np 4 ./wrf.exe
+tail rsl.out.0000        # Should show SUCCESS COMPLETE WRF
 ```
 
 > **v4.7 download note:** When downloading from GitHub, use the `v4.7.x.tar.gz` file — NOT the auto-generated "Source Code" archive, which misses required submodules (NoahMP, MYNN-EDMF, MMM-physics).
+
+### Domain Decomposition & Performance
+
+WRF splits the domain into rectangular **tiles** distributed across MPI processes. Good decomposition = balanced workload = faster runtime.
+
+**Automatic vs manual decomposition:**
+
+By default, WRF auto-decomposes into a 2D grid of patches. You can override with:
+```
+&domains
+ nproc_x = 8,           ! Number of MPI ranks in x-direction
+ nproc_y = 8,           ! Number of MPI ranks in y-direction
+                         ! Total MPI ranks = nproc_x * nproc_y (+ IO quilting procs)
+/
+```
+
+**Guidelines:**
+- `nproc_x * nproc_y` must equal total compute MPI ranks (excluding quilting tasks)
+- Each patch should have at least **25 x 25 grid points** per process for efficiency
+- Aim for square-ish patches: if domain is 300 x 200, use 6x4 (not 12x2)
+- For nested domains, the innermost domain's decomposition often limits scaling
+
+**How many processors to use:**
+
+| Domain Size (e_we x e_sn) | Reasonable MPI Ranks | Notes |
+|---|---|---|
+| 100 x 100 | 4–16 | Diminishing returns beyond 16 |
+| 300 x 300 | 16–64 | Sweet spot for desktop/small cluster |
+| 500 x 500 | 64–256 | Scales well on HPC |
+| 1000 x 1000 | 256–1024+ | Need I/O quilting at this scale |
+
+### I/O Quilting
+
+For large domains, writing output becomes a bottleneck — compute processors stop computing while writing to disk. **I/O quilting** dedicates separate MPI ranks to handle output asynchronously.
+
+```
+&domains
+ nio_tasks_per_group = 2,    ! Number of MPI ranks dedicated to I/O per group
+ nio_groups          = 1,    ! Number of I/O groups (usually 1)
+/
+```
+
+**How it works:**
+- Total MPI ranks = compute ranks + (nio_tasks_per_group × nio_groups)
+- Example: `mpirun -np 66 ./wrf.exe` with `nio_tasks_per_group=2, nio_groups=1` → 64 compute + 2 I/O
+- The I/O ranks collect output from compute ranks and write to disk while computation continues
+
+**When to use:**
+- Domain > ~500 x 500 grid points
+- Output files > 1 GB per time step
+- Output interval is frequent (e.g., every 15 min for a large domain)
+- You notice significant time spent in I/O (check `rsl.out.0000` for timing)
+
+> **Tip:** Start with `nio_tasks_per_group = 0` (no quilting, default) for small runs. Add quilting when output time exceeds 10–15% of total runtime.
+
+### Parallel NetCDF for Large Files
+
+For output files exceeding 4 GB (common with high-resolution, many-variable output):
+
+```
+&time_control
+ io_form_history  = 102,     ! Parallel NetCDF (split across MPI ranks during write)
+ io_form_restart  = 102,     ! Also for restart files
+/
+```
+
+| io_form Value | Format | Notes |
+|---|---|---|
+| 2 | NetCDF (serial) | Default. Single file per time. Limit ~4 GB without NetCDF-4. |
+| 11 | pnetcdf | Parallel NetCDF (requires pnetcdf library). Fast parallel writes. |
+| 102 | NetCDF (split) | Each processor writes its own file. Use `ncrcat` to merge. |
 
 ---
 
@@ -1515,7 +2123,7 @@ grep -i error rsl.error.0000                   # Namelist errors
 
 ### Memory Issues
 
-- Run `ulimit -s unlimited` before execution (NOT for OpenMP/smpar builds)
+- Run `ulimit -s unlimited` before execution (especially important for OpenMP/smpar and dm+sm builds, which use stack-heavy threading)
 - Increase MPI processes rather than memory per node for large domains
 - Use `io_form_restart = 102` for restart files > 4 GB
 
