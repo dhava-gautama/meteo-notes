@@ -333,43 +333,43 @@ time_step (seconds) = 6 x dx (km)
 
 ### Microphysics (`mp_physics`)
 
-| Value | Scheme | Notes |
+| Value | Scheme | Description |
 |---|---|---|
-| 1 | Kessler | Simple warm-rain, no ice |
-| 2 | Purdue Lin | 6-class with ice, snow, graupel |
-| 6 | WSM6 | Ice, snow, graupel |
-| 8 | **Thompson** | Popular, well-tested |
-| 10 | **Morrison 2-moment** | Double-moment, widely used for research |
-| 18 | **NSSL 2-moment** | Consolidated in v4.6+; controls via `nssl_*` flags |
-| 27 | **UFS Double Moment** | New in v4.7; 7-class, aerosol-aware CCN (from S.-Y. Hong) |
-| 28 | **Thompson Aerosol-Aware** | Thompson with aerosol interactions |
-| 29 | **RCON** | New in v4.7; improved warm rain / drizzle (Conrick et al. 2023) |
-| 50–53 | P3 variants | Predicted particle properties |
+| 1 | Kessler | Simple warm-rain only (cloud, rain). No ice-phase processes. Educational / idealized cases only. |
+| 2 | Purdue Lin | Single-moment, 6-class (vapor, cloud, rain, ice, snow, graupel). Computationally cheap. Suitable for coarse-resolution runs where detailed microphysics is not critical. |
+| 6 | WSM6 | Single-moment, 6-class. Improved ice nucleation over Lin. Good balance of speed and accuracy for general simulations. Developed by NCEP/KMA (Hong & Lim 2006). |
+| 8 | **Thompson** | Hybrid single/double-moment — double-moment for rain and ice, single for others. Excellent for mixed-phase clouds, winter precipitation, and snowfall. One of the most widely validated and popular schemes. |
+| 10 | **Morrison 2-moment** | Full double-moment for cloud, rain, ice, snow, graupel (predicts both mass and number concentration). Best for research requiring accurate size distributions. Standard choice for convection-permitting simulations. |
+| 18 | **NSSL 2-moment** | Full double-moment with optional hail category and CCN prediction. Strong for severe convective storms — explicitly predicts graupel/hail size. Consolidated in v4.6+ (controls via `nssl_*` flags). |
+| 27 | **UFS Double Moment** | 7-class, double-moment with aerosol-aware CCN activation. Developed for NOAA's Unified Forecast System. New in v4.7 (from S.-Y. Hong). |
+| 28 | **Thompson Aerosol-Aware** | Extension of Thompson with prognostic aerosol (water- and ice-friendly). Aerosol-cloud interactions affect droplet number and precipitation efficiency. Good for air quality-sensitive forecasts. |
+| 29 | **RCON** | Improved representation of warm rain and drizzle processes. Better collision-coalescence and autoconversion. New in v4.7 (Conrick et al. 2023). |
+| 50–53 | P3 variants | Predicted Particle Properties — represents ice with a single free category using prognostic properties (mass, number, rime fraction, rime density) instead of fixed categories. Eliminates artificial ice-type conversions. |
 
 > **NSSL consolidation (v4.6+):** `mp_physics=17, 19, 21, 22` are deprecated. Use `mp_physics=18` with `nssl_2moment_on`, `nssl_ccn_on`, `nssl_hail_on` flags instead.
 
 ### Cumulus Parameterization (`cu_physics`)
 
-| Value | Scheme | Notes |
+| Value | Scheme | Description |
 |---|---|---|
-| 0 | **None** | **Use when dx < ~4 km** (convection-permitting) |
-| 1 | **Kain-Fritsch** | Most widely used; deep + shallow |
-| 2 | Betts-Miller-Janjic | Adjustment scheme |
-| 3 | **Grell-Freitas** | Scale-aware, works across resolutions |
-| 6 | Tiedtke | Mass-flux scheme |
-| 16 | New Tiedtke | Updated mass-flux |
+| 0 | **None** | No cumulus parameterization. **Required when dx < ~4 km** — at convection-permitting resolution, convection is explicitly resolved by the model grid. |
+| 1 | **Kain-Fritsch** | Mass-flux scheme with CAPE-removal closure. Handles both deep and shallow convection. The most widely used and validated cumulus scheme. Triggers when CAPE exceeds a threshold and removes CAPE over a specified timescale. Best for dx > 10 km. |
+| 2 | Betts-Miller-Janjic | Relaxation/adjustment scheme — adjusts thermodynamic profiles toward observed post-convective reference profiles. Tends to produce lighter, more widespread precipitation. Commonly used for tropical and hurricane simulations. |
+| 3 | **Grell-Freitas** | Scale-aware ensemble mass-flux scheme. Automatically reduces its contribution as resolution increases toward convection-permitting scales. Ideal for domains spanning the "grey zone" (4–10 km) and multi-resolution nesting without manually toggling cumulus on/off. |
+| 6 | Tiedtke | Mass-flux scheme with moisture-convergence closure. Originally from ECMWF. Handles deep, shallow, and mid-level convection separately. Commonly used in global and tropical applications. |
+| 16 | New Tiedtke | Updated version of Tiedtke with improved detrainment and CAPE-based closure for deep convection. Used operationally in several global models. Better representation of organized convection and diurnal cycle. |
 
 > **Critical:** Turn OFF cumulus parameterization when dx < ~4 km. Use scale-aware schemes (Grell-Freitas) in the "grey zone" (4–10 km).
 
 ### Planetary Boundary Layer (`bl_pbl_physics`)
 
-| Value | Scheme | Type | Paired Surface Layer (`sf_sfclay_physics`) |
-|---|---|---|---|
-| 1 | **YSU** | Non-local | 1 (Revised MM5) |
-| 2 | **MYJ** | Local, TKE | 2 (Eta Similarity) |
-| 5 | **MYNN-EDMF** | Local, TKE | 5 (MYNN) |
-| 7 | ACM2 | Hybrid | 7 (Pleim-Xiu) or 1 |
-| 8 | BouLac | Local, TKE | 1 or 2 |
+| Value | Scheme | Type | Paired SfcLay | Description |
+|---|---|---|---|---|
+| 1 | **YSU** | Non-local | 1 (Revised MM5) | Yonsei University scheme. Uses counter-gradient flux to represent large eddies that transport heat/moisture across the entire PBL depth. Well-mixed boundary layers, good for clear-sky daytime convective conditions. Most popular general-purpose PBL scheme. |
+| 2 | **MYJ** | Local, TKE | 2 (Eta Similarity) | Mellor-Yamada-Janjic Level 2.5. Prognostic TKE with local diffusion only — mixing depends on local gradients. Tends to produce shallower, less well-mixed PBLs than YSU. Good for stable/nocturnal conditions. Heritage from NAM/Eta model. |
+| 5 | **MYNN-EDMF** | Local, TKE | 5 (MYNN) | Mellor-Yamada-Nakanishi-Niino Level 2.5 with Eddy-Diffusivity Mass-Flux extension for shallow convection. Prognostic TKE and sub-grid clouds. Superior for marine/coastal environments, fog, and low cloud prediction. Increasingly the recommended default. |
+| 7 | ACM2 | Hybrid | 7 (Pleim-Xiu) or 1 | Asymmetric Convective Model v2. Combines non-local upward transport (convective plumes) with local downward diffusion. Designed for air quality applications — pairs with Pleim-Xiu land surface for EPA CMAQ modeling chain. |
+| 8 | BouLac | Local, TKE | 1 or 2 | Bougeault-Lacarrère scheme. TKE-based local closure with diagnostic mixing length from stability and terrain geometry. Designed for complex mountainous terrain where terrain-influenced turbulence is important. |
 
 > **v4.7 note:** MYNN-EDMF is now a git submodule, refactored to k-only scheme (10–15% faster). Module names changed from `*_mynn_*` to `*_mynnedmf_*`.
 
@@ -377,24 +377,24 @@ time_step (seconds) = 6 x dx (km)
 
 ### Radiation
 
-| Value | LW Scheme | SW Scheme | Notes |
+| Value | LW Scheme | SW Scheme | Description |
 |---|---|---|---|
-| 1 | RRTM | Dudhia | Standard, fast |
-| 4 | **RRTMG** | **RRTMG** | Most recommended |
-| 5 | New Goddard | New Goddard | |
-| 99 | GFDL | GFDL | Hurricane heritage |
+| 1 | RRTM | Dudhia | **LW:** Rapid Radiative Transfer Model — correlated-k method with 16 spectral bands. Accurate longwave fluxes and cooling rates. **SW:** Dudhia — simple broadband scheme, fast but less accurate for clear-sky direct beam. Good default for quick simulations where radiation speed matters. |
+| 4 | **RRTMG** | **RRTMG** | RRTM for GCMs — updated RRTM with Monte Carlo Independent Column Approximation (McICA) for sub-grid cloud variability. 14 SW bands and 16 LW bands. Accounts for cloud overlap effects. The most recommended radiation scheme — balances accuracy and speed. Supports aerosol direct effects. |
+| 5 | New Goddard | New Goddard | NASA Goddard scheme with 11 SW bands and 10 LW bands. Good for tropical and cloud-radiation interaction studies. Includes ozone and CO2 effects. Slightly more expensive than RRTMG. |
+| 99 | GFDL | GFDL | NOAA Geophysical Fluid Dynamics Laboratory scheme. Heritage from HWRF hurricane model. Optimized for tropical cyclone simulations — well-tested for warm-core vortex radiation balance. Simmons broadband approach. |
 
 Set `radt` (radiation interval, minutes) approximately equal to `dx` in km. Never exceed 30 min.
 
 ### Land Surface Model (`sf_surface_physics`)
 
-| Value | Scheme | Soil Layers | Notes |
+| Value | Scheme | Soil Layers | Description |
 |---|---|---|---|
-| 1 | 5-layer Thermal Diffusion | 5 | Simple, fast |
-| 2 | **Noah** | 4 | Standard, widely used |
-| 4 | **Noah-MP** | 4 | Most advanced, multi-physics (now a git submodule) |
-| 5 | CLM4 | 10 | Community Land Model |
-| 7 | Pleim-Xiu | 2 | v4.7: now supports 61-category MODIS LCZ |
+| 1 | 5-layer Thermal Diffusion | 5 | Simplest option — soil temperature diffusion only. No vegetation canopy, no explicit soil moisture evolution, no evapotranspiration. Fast but unrealistic surface fluxes. Only for quick tests. |
+| 2 | **Noah** | 4 | NCEP operational standard. Predicts soil temperature, soil moisture, skin temperature, snowpack, and canopy water. Includes frozen soil physics, evapotranspiration via Penman scheme, and 24-category USGS or 20-category MODIS land use. Reliable and well-tested for general use. |
+| 4 | **Noah-MP** | 4 | Noah Multi-Physics — most advanced option. Adds separate vegetation canopy, dynamic vegetation, multi-layer snowpack, groundwater table, and multiple options for each process (e.g., Ball-Berry stomatal resistance, runoff schemes). Allows toggling sub-models on/off. Best for research requiring realistic land-atmosphere coupling. Now a git submodule in v4.7. |
+| 5 | CLM4 | 10 | Community Land Model v4 (from NCAR CESM). 10 soil layers to 3.4 m depth, up to 5 snow layers, sophisticated biogeophysics (photosynthesis-conductance, urban canopy). Most detailed treatment of sub-grid land heterogeneity (PFTs). Computationally expensive. Best for climate and long-duration simulations. |
+| 7 | Pleim-Xiu | 2 | Two-layer soil model with indirect soil moisture nudging from observed 2-m temperature/humidity. Designed for EPA air quality modeling chain (pairs with ACM2 PBL). Supports 61-category MODIS LCZ in v4.7 for urban studies. |
 
 ### Recommended Combinations
 
