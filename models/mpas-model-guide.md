@@ -777,11 +777,26 @@ MPAS provides pre-tested combinations of physics schemes called **suites**. Sett
 
 **Radiation calling interval:**
 ```
-config_radt_lw_interval = '01:00:00'     ! Call LW radiation every 1 hour
-config_radt_sw_interval = '01:00:00'     ! Call SW radiation every 1 hour
+config_radtlw_interval = '01:00:00'     ! Call LW radiation every 1 hour
+config_radtsw_interval = '01:00:00'     ! Call SW radiation every 1 hour
 ```
 
 For convection-permitting (dx < 10 km), reduce to `'00:30:00'` or `'00:15:00'`.
+
+### Physics Timing & Control Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `config_radtlw_interval` | `'01:00:00'` | Longwave radiation call interval |
+| `config_radtsw_interval` | `'01:00:00'` | Shortwave radiation call interval |
+| `config_conv_interval` | `'none'` | Convection call interval (`'none'` = every timestep) |
+| `config_pbl_interval` | `'none'` | PBL call interval |
+| `config_n_microp` | 1 | Microphysics sub-steps per timestep |
+| `config_sst_update` | false | Enable SST/sea-ice updates from `surface.nc` |
+| `config_frac_seaice` | false | Fractional sea-ice treatment |
+| `config_bucket_update` | `'none'` | Precipitation bucket reset interval |
+| `config_bucket_rainc` | 100.0 | Convective rain bucket size (mm) |
+| `config_bucket_rainnc` | 100.0 | Grid-scale rain bucket size (mm) |
 
 ### Cloud Fraction (`config_radt_cld_scheme`)
 
