@@ -22,6 +22,9 @@
 13. [Restart & Cycling](#13-restart--cycling)
 14. [Troubleshooting & Tips](#14-troubleshooting--tips)
 15. [Version History](#15-version-history)
+16. [GPU Acceleration (OpenACC)](#16-gpu-acceleration-openacc)
+17. [Other MPAS Components (Ocean, Sea-Ice, Land Ice)](#17-other-mpas-components-ocean-sea-ice-land-ice)
+18. [E3SM Integration](#18-e3sm-integration)
 
 ---
 
@@ -1409,6 +1412,311 @@ grep -i "error\|abort\|nan" log.atmosphere.0000.err
 
 ---
 
+## 16. GPU Acceleration (OpenACC)
+
+### Overview
+
+MPAS-Atmosphere uses **OpenACC directives** for GPU acceleration — a single-source approach that compiles for both CPU-only and GPU execution. There is no CUDA Fortran or OpenMP target offloading implementation. Only **NVIDIA GPUs** are currently supported.
+
+### GPU Support by Version
+
+| Version | GPU Content |
+|---|---|
+| `atmosphere/v6.x-openacc` branch | First GPU implementation. Full dynamics + physics (except RRTMG radiation). Powered The Weather Company's **GRAF** system — the first operational global weather model on GPUs. |
+| `atmosphere/develop-openacc` branch | Active development branch for newer GPU porting work. |
+| **v8.2.0** (June 2024) | Scalar transport code ported to GPUs. First GPU content in mainline. |
+| **v8.3.0** (June 2025) | **Complete dynamical core** ported to GPUs, including limited-area routines. Physics still on CPU. |
+
+### Compiler Requirements
+
+Only the **NVIDIA HPC SDK** (`nvhpc` / `nvfortran`) is tested. GNU and Cray OpenACC support has not been validated for MPAS.
+
+- v6.x-openacc branch: PGI 19.10
+- v8.x mainline: nvhpc 24.3, 24.11, 25.1 confirmed on NCAR Derecho
+
+### Compilation
+
+```bash
+# v8.x mainline (dynamical core on GPU)
+make -j4 nvhpc CORE=atmosphere AUTOCLEAN=true OPENACC=true
+
+# With single precision (recommended for GPU)
+make -j4 nvhpc CORE=atmosphere AUTOCLEAN=true PRECISION=single OPENACC=true
+
+# v6.x-openacc branch (legacy, full dynamics+physics)
+git checkout atmosphere/v6.x-openacc
+make -j4 pgi CORE=atmosphere USE_PIO2=true OPENACC=true
+```
+
+When `OPENACC=true` is set, the build system:
+1. Adds `-Mnofma -acc -gpu=cc70,cc80 -Minfo=accel` to Fortran flags
+2. Defines the preprocessor macro `MPAS_OPENACC`
+3. Runs an `openacc_test` to verify compiler support
+4. Prints **"MPAS was built with OpenACC enabled."** on success
+
+**Required libraries** (example from NCAR Derecho):
+```
+nvhpc/24.3, cray-mpich/8.1.27, cuda/12.2.1,
+parallel-netcdf/1.12.3, netcdf-mpi/4.9.2
+```
+
+> PIO is **not required** for v8.x GPU builds — SMIOL handles I/O.
+
+### What Runs on GPU vs CPU
+
+**v8.3.x mainline:**
+
+| Component | Device |
+|---|---|
+| Full dynamical core | GPU |
+| All physics parameterizations | CPU |
+| I/O | CPU |
+
+**v6.x-openacc branch (legacy):**
+
+| Component | Device |
+|---|---|
+| Dynamical core | GPU |
+| All physics except radiation | GPU |
+| RRTMG radiation | CPU (lagged model state) |
+| I/O | CPU |
+
+### Lagged Radiation (v6.x-openacc)
+
+RRTMG radiation is too large to port efficiently, so the v6.x branch uses a **hybrid CPU-GPU architecture**:
+- Separate MPI intracommunicators: one for GPU tasks (dynamics + non-radiation physics) and one for CPU tasks (radiation)
+- Radiation tendencies from the **previous** calling interval are applied while the current interval's tendencies compute in parallel
+- Controlled by environment variables: `MPAS_DYNAMICS_RANKS_PER_NODE` and `MPAS_RADIATION_RANKS_PER_NODE`
+
+### Running on GPUs
+
+**GPU-to-MPI rank mapping script** (recommended):
+```bash
+#!/bin/bash
+export LOCAL_RANK=$SLURM_LOCALID
+export GPUS=($(echo $CUDA_VISIBLE_DEVICES | tr , '\n'))
+export CUDA_VISIBLE_DEVICES=${GPUS[$((SLURM_LOCALID % $SLURM_GPUS_ON_NODE))]}
+exec $1
+```
+
+**Launch:**
+```bash
+mpirun -np <tasks> ./set_gpu_rank.sh ./atmosphere_model
+```
+
+### Performance
+
+| Benchmark | Speedup |
+|---|---|
+| Dynamical core: 1 V100 vs 36-core Intel Broadwell | **3.7×** |
+| 1 V100 equivalent | ~130 Broadwell CPU cores |
+| Full model: IBM AC922 node (POWER9 + 4×V100) vs NCAR Cheyenne node | **~7×** |
+| WSM6 microphysics kernel on V100 (Kim et al., 2021) | **5.7×** (kernel only) |
+
+Multi-GPU scaling tested on up to **4,200 GPUs** across resolutions from 120 km to 3 km.
+
+**GPU memory estimate:** ~175 KiB per grid column (55 levels, mesoscale_reference). A 40 GB A100 supports ~239,000 columns.
+
+### The Weather Company GRAF
+
+The Global High-Resolution Atmospheric Forecasting (GRAF) system was the **first operational global weather model run on GPUs**:
+- 84 IBM AC922 nodes, each with 4 NVIDIA V100 GPUs
+- Variable-resolution mesh: 3 km over land
+- Based on the `v6.x-openacc` branch
+
+### Limitations
+
+1. **v8.3.x:** Only the dynamical core is GPU-ported; physics remain on CPU with unoptimized host-device data transfers
+2. **Compiler lock-in:** Only NVIDIA HPC SDK is tested — no AMD/Intel GPU support
+3. **v6.x branch frozen:** Feature-complete GPU coverage but based on old model version (v6.x), missing newer physics and features
+4. **Experimental status:** NCAR describes the v8.x GPU port as "experimental and only checked for correctness"
+5. **GPU vs CPU discrepancies:** Users reported differences in cloud fields between GPU and CPU runs on the v6.x branch
+
+---
+
+## 17. Other MPAS Components (Ocean, Sea-Ice, Land Ice)
+
+The MPAS framework supports multiple model **cores** that share the same infrastructure (mesh I/O, domain decomposition, halo exchange, time management). Each core compiles into an independent executable.
+
+### MPAS Framework Cores
+
+| Core | Executable | Description | Primary Developer |
+|---|---|---|---|
+| `atmosphere` | `atmosphere_model` | Nonhydrostatic global atmosphere | NSF NCAR |
+| `init_atmosphere` | `init_atmosphere_model` | Atmospheric initialization | NSF NCAR |
+| `ocean` | `ocean_model` | Hydrostatic global ocean | LANL |
+| `seaice` | `seaice_model` | Sea ice dynamics & thermodynamics | LANL |
+| `landice` | `landice_model` | Ice sheet model (MALI) | LANL / SNL |
+
+```bash
+# Build any core by setting CORE=
+make gfortran CORE=ocean
+make gfortran CORE=seaice
+make gfortran CORE=landice
+```
+
+> **Direct coupling:** Standalone MPAS cores cannot be coupled directly. Inter-core coupling requires the **E3SM coupled model** with its CPL7/MCT coupler (see Section 18).
+
+### MPAS-Ocean
+
+MPAS-Ocean is a global ocean model solving the **three-dimensional, hydrostatic, Boussinesq primitive equations** on unstructured Voronoi meshes. It is the ocean component of the DOE's E3SM model, developed primarily at Los Alamos National Laboratory.
+
+**Key features:**
+
+| Feature | Description |
+|---|---|
+| **Mesh** | Same SCVT Voronoi mesh as MPAS-Atmosphere (C-grid staggering) |
+| **Variable resolution** | Seamless mesh refinement in regions of interest (e.g., 15 km North Atlantic within 60 km global) |
+| **Vertical coordinate** | Arbitrary Lagrangian-Eulerian (ALE): supports z-level, z-star (default), z-tilde, isopycnal, and sigma |
+| **Time stepping** | Split-explicit: fast barotropic (2D) separated from slow baroclinic (3D) |
+| **Tracer advection** | Quasi-third-order monotone scheme on unstructured mesh |
+| **Conservation** | Guaranteed conservation of mass, tracers, potential vorticity (isopycnal), and energy |
+
+**Vertical coordinate options:**
+
+| Coordinate | Description |
+|---|---|
+| z-level | Fixed-depth layers |
+| z-star (z*) | Columns expand/contract with free surface (default) |
+| z-tilde | Lagrangian tracking of fast oscillations, reduces spurious diapycnal mixing |
+| Isopycnal | Potential-density coordinate, eliminates spurious diapycnal mixing |
+| Sigma | Terrain-following |
+
+**Representative namelist parameters** (`namelist.ocean.forward` or `user_nl_mpaso` in E3SM):
+
+| Parameter | Description | Example |
+|---|---|---|
+| `config_dt` | Baroclinic time step | `'00:03:00'` |
+| `config_time_integrator` | Time integration scheme | `'split_explicit'` |
+| `config_use_GM` | Gent-McWilliams eddy parameterization | `.true.` |
+| `config_GM_closure` | GM closure type | `'constant'` |
+| `config_GM_constant_kappa` | GM diffusivity (m²/s) | `900` |
+
+**References:**
+- Ringler et al. (2013): "A multi-resolution approach to global ocean modeling." *Ocean Modelling*, 69, 211–232
+- Petersen et al. (2015): "Evaluation of the arbitrary Lagrangian-Eulerian vertical coordinate method in the MPAS-Ocean model." *Ocean Modelling*, 86, 93–113
+
+### MPAS-Seaice
+
+MPAS-Seaice is the sea-ice component of E3SM, adapted from the **CICE** model for unstructured Voronoi meshes. It shares the same horizontal mesh as MPAS-Ocean.
+
+**Key features:**
+
+| Feature | Description |
+|---|---|
+| **Grid staggering** | B-grid (velocity at vertices, tracers at cell centers) — differs from MPAS-Ocean's C-grid |
+| **Dynamics** | Elastic-Viscous-Plastic (EVP) rheology, same as CICE |
+| **Transport** | Incremental remapping generalized to n-gons; conservative and monotone |
+| **Column physics** | Uses **Icepack** library (CICE Consortium) as a Git submodule |
+| **Mesh compatibility** | On quadrilateral meshes, reproduces CICE results exactly |
+
+**Icepack column physics modules:**
+
+| Module | Description |
+|---|---|
+| Thermodynamics | Mushy-layer scheme (prognostic temperature and salinity) |
+| Melt ponds | Level-ice scheme with tracers on undeformed ice |
+| Radiation | SNICAR-AD (5-band snow optics, delta-Eddington) |
+| Snow | 5 vertical layers with prognostic grain radius |
+| Ridging | Mechanical redistribution of ice area and thickness |
+| Biogeochemistry | Vertically resolved aerosol and ecosystem tracers |
+
+**Ocean-ice coupling exchanges (within E3SM):**
+
+| Exchange | Direction |
+|---|---|
+| Frazil ice mass | Ocean → Sea Ice |
+| Ice/snow weight (surface depression) | Sea Ice → Ocean |
+| Sea surface gradient (tilt force) | Ocean → Sea Ice |
+| Mass/salt/heat fluxes | Bidirectional |
+| Basal temperature | Ocean → Sea Ice |
+
+**Performance:** ~70% of CICE throughput due to unstructured mesh overhead.
+
+**Reference:** Turner et al. (2022): "MPAS-Seaice (v1.0.0): sea-ice dynamics on unstructured Voronoi meshes." *Geosci. Model Dev.*, 15, 3721–3751
+
+### MPAS-Albany Land Ice (MALI)
+
+MALI is a variable-resolution ice sheet model, the land-ice component of E3SM. Built on the MPAS framework for mesh infrastructure and the **Albany** multi-physics code (Sandia) for velocity solving.
+
+**Key features:**
+
+| Feature | Description |
+|---|---|
+| Velocity solvers | 3D first-order Blatter-Pattyn (via Albany); shallow ice approximation |
+| Geometry evolution | Explicit first-order horizontal advection with vertical remapping |
+| Temperature | Operator splitting (vertical diffusion + horizontal advection); temperature or enthalpy |
+| Subglacial hydrology | Distributed and/or channelized drainage, coupled to ice dynamics |
+| Calving | Eigencalving (rate proportional to extensional strain) |
+| Resolution | Down to 500 m at ice streams and shelves |
+| GPU support | First large-scale ice sheet model routinely running on GPUs |
+
+**Reference:** Hoffman et al. (2018): "MPAS-Albany Land Ice (MALI): a variable-resolution ice sheet model." *Geosci. Model Dev.*, 11, 3747–3780
+
+---
+
+## 18. E3SM Integration
+
+### What Is E3SM?
+
+The **Energy Exascale Earth System Model** is a DOE-funded, fully coupled Earth system model designed for DOE leadership computing facilities. MPAS provides three of its six components.
+
+| Component | Model | Developer |
+|---|---|---|
+| Atmosphere | EAM (E3SM Atmosphere Model) | Multiple DOE labs |
+| Ocean | **MPAS-Ocean** | LANL |
+| Sea Ice | **MPAS-Seaice** | LANL |
+| Land Ice | **MALI (MPAS-Albany Land Ice)** | LANL / SNL |
+| Land | ELM (E3SM Land Model) | Multiple DOE labs |
+| River | MOSART | PNNL |
+
+> **Note:** E3SM's atmosphere component (EAM) is based on CAM, not MPAS-Atmosphere. MPAS-Atmosphere is developed separately at NCAR for NWP applications.
+
+### Coupling Architecture
+
+E3SM uses the **CPL7 coupler** with the **Model Coupling Toolkit (MCT)**:
+- **Hub-and-spoke:** Components do not communicate directly — all field exchanges pass through the central coupler
+- **Mapping weights:** Regridding between component grids uses **TempestRemap** (conservative, monotone maps)
+- **Unified ocean/ice mesh:** MPAS-Ocean and MPAS-Seaice always share the same horizontal mesh
+- **Flux calculations:** Air-sea fluxes are computed in the coupler, not in individual components
+
+### E3SM Ocean/Ice Compsets
+
+| Compset | Description |
+|---|---|
+| `GMPAS-JRA1p5` | Active ocean + sea ice, JRA55 v1.5 atmosphere (1958–2020) |
+| `GMPAS-IAF` | Active ocean + sea ice, CORE-II forcing (1948–2009) |
+| `CMPASO-JRA1p4` | Ocean-only, JRA55 v1.4 atmosphere (1958–2018) |
+| `CMPASO-IAF` | Ocean-only, CORE-II forcing (1948–2009) |
+
+### Supported Meshes (E3SM Ocean/Ice)
+
+| Mesh | Description |
+|---|---|
+| `IcoswISC30E3r5` | 30 km icosahedral with ice-shelf cavities |
+| `oQU240` | 2° quasi-uniform (testing only) |
+
+### Development Repositories
+
+Active development of the ocean, sea-ice, and land-ice cores occurs in the **E3SM repository**, not the standalone MPAS-Model repo:
+
+| Repository | URL | Contents |
+|---|---|---|
+| MPAS-Model (standalone) | [github.com/MPAS-Dev/MPAS-Model](https://github.com/MPAS-Dev/MPAS-Model) | All cores; version tags aligned with atmosphere |
+| E3SM (coupled) | [github.com/E3SM-Project/E3SM](https://github.com/E3SM-Project/E3SM) | Active ocean/ice/landice development |
+| MPAS-Analysis | [github.com/MPAS-Dev/MPAS-Analysis](https://github.com/MPAS-Dev/MPAS-Analysis) | Post-simulation diagnostics |
+| Compass | [github.com/MPAS-Dev/compass](https://github.com/MPAS-Dev/compass) | Ocean/ice test case framework |
+
+### E3SM Version History
+
+| Version | Key Developments |
+|---|---|
+| **E3SM v1** (2019) | First release with MPAS-Ocean, MPAS-Seaice, MALI |
+| **E3SM v2** (2022) | Mushy thermodynamics in sea ice, improved ocean-ice coupling, submesoscale parameterizations |
+| **E3SM v3** (2024) | Property-preserving flux maps, MPAS-Ocean User's Guide V3.0.0 |
+
+---
+
 ## References
 
 - [MPAS Home Page](https://mpas-dev.github.io/)
@@ -1428,3 +1736,16 @@ grep -i "error\|abort\|nan" log.atmosphere.0000.err
 - [MPAS-Atmosphere Test Cases (v7.0)](https://www2.mmm.ucar.edu/projects/mpas/test_cases/v7.0/)
 - [MPAS Static Data](https://www2.mmm.ucar.edu/projects/mpas/mpas_static.tar.bz2)
 - Skamarock et al. (2012): "A Multiscale Nonhydrostatic Atmospheric Model Using Centroidal Voronoi Tesselations and C-Grid Staggering", MWR
+- [GPU-enabled MPAS-Atmosphere Documentation](https://mpas-dev.github.io/atmosphere/OpenACC/index.html)
+- [MPAS-Ocean](https://mpas-dev.github.io/ocean/ocean.html)
+- [MPAS-Seaice](https://mpas-dev.github.io/sea_ice/sea_ice.html)
+- [E3SM Project](https://e3sm.org/)
+- [E3SM Documentation](https://docs.e3sm.org/E3SM/)
+- [MPAS-Ocean User's Guide V3.0.0 (Zenodo)](https://zenodo.org/records/11098080)
+- [MPAS-Analysis](https://github.com/MPAS-Dev/MPAS-Analysis)
+- [Compass (ocean/ice test cases)](https://github.com/MPAS-Dev/compass)
+- [Icepack (CICE Consortium column physics)](https://github.com/CICE-Consortium/Icepack)
+- Ringler et al. (2013): "A multi-resolution approach to global ocean modeling", Ocean Modelling, 69, 211–232
+- Turner et al. (2022): "MPAS-Seaice (v1.0.0): sea-ice dynamics on unstructured Voronoi meshes", GMD, 15, 3721–3751
+- Hoffman et al. (2018): "MPAS-Albany Land Ice (MALI): a variable-resolution ice sheet model", GMD, 11, 3747–3780
+- Golaz et al. (2019): "The DOE E3SM coupled model version 1: Overview and evaluation", JAMES, 11, 2089–2129
