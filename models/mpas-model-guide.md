@@ -293,6 +293,13 @@ Download the same WPS static data used by WRF:
 
 Extract to a directory (e.g., `/data/WPS_GEOG/`) and set `config_geog_data_path` in the init namelist.
 
+**MPAS-specific static data** (alternative to full WPS GEOG):
+- Minimal static dataset: [www2.mmm.ucar.edu/projects/mpas/mpas_static.tar.bz2](https://www2.mmm.ucar.edu/projects/mpas/mpas_static.tar.bz2)
+
+**Aerosol climatology** (needed for Thompson aerosol-aware microphysics):
+- Download: [www2.mmm.ucar.edu/projects/mpas/QNWFA_QNIFA_SIGMA_MONTHLY.dat](https://www2.mmm.ucar.edu/projects/mpas/QNWFA_QNIFA_SIGMA_MONTHLY.dat)
+- Place in run directory when using `mp_thompson_aerosols`
+
 ---
 
 ## 4. Compilation & System Requirements
@@ -356,8 +363,9 @@ make -j4 gfortran CORE=atmosphere PRECISION=single USE_PIO2=true
 | Flag | Values | Description |
 |---|---|---|
 | `CORE=` | `init_atmosphere`, `atmosphere` | Which core to build |
-| `PRECISION=` | `single`, `double` | Floating-point precision. Single is recommended for efficiency. |
-| `USE_PIO2=` | `true`, `false` | Use PIO 2.x (recommended) |
+| `PRECISION=` | `single`, `double` | Floating-point precision. Single is recommended for efficiency (~30% faster). |
+| `USE_PIO2=` | `true`, `false` | Use PIO 2.x (recommended if using PIO) |
+| `AUTOCLEAN=` | `true` | Auto-clean when switching between cores (avoids manual `make clean`) |
 | `OPENMP=` | `true` | Enable hybrid MPI+OpenMP (experimental) |
 | `DEBUG=` | `true` | Enable debug flags and bounds checking |
 
@@ -367,7 +375,14 @@ ls -l init_atmosphere_model    # From init_atmosphere build
 ls -l atmosphere_model         # From atmosphere build
 ```
 
-> **v8.0+ note:** MPAS 8.0 introduced the Simple MPAS I/O Layer (SMIOL), which provides parallel I/O with reduced external dependencies. With SMIOL, PIO and pnetcdf are optional.
+> **v8.0+ SMIOL:** MPAS 8.0 introduced the **Simple MPAS I/O Layer (SMIOL)**, a built-in alternative to PIO. If the `$PIO` environment variable is **not set**, MPAS defaults to SMIOL, which requires only Parallel-netCDF. This significantly reduces external dependency complexity — PIO compilation is no longer needed.
+
+**Simplified build with SMIOL (no PIO needed):**
+```bash
+# Only NETCDF and PNETCDF needed
+unset PIO
+make -j4 gfortran CORE=atmosphere PRECISION=single
+```
 
 ### Hardware Requirements
 
@@ -532,15 +547,25 @@ Interpolates atmospheric fields from WPS intermediate files onto the MPAS mesh, 
 mpiexec -n 8 ./init_atmosphere_model
 ```
 
-### Step 3 (Optional): Surface Update File
+### Step 3 (Optional): Surface Update File (Case 8)
 
 For multi-day simulations, create time-varying SST/sea-ice files:
 
 **namelist.init_atmosphere (surface update):**
 ```
 &nhyd_model
-    config_init_case = 7
+    config_init_case = 8
     config_start_time = '2024-09-01_00:00:00'
+    config_stop_time = '2024-09-06_00:00:00'
+/
+&dimensions
+    config_nfglevels = 38
+    config_nfgsoillevels = 4
+/
+&data_sources
+    config_met_prefix = 'FILE'
+    config_sfc_prefix = 'FILE'
+    config_fg_interval = 86400           ! SST update interval (seconds); 86400 = daily
 /
 &preproc_stages
     config_static_interp = false
@@ -549,10 +574,6 @@ For multi-day simulations, create time-varying SST/sea-ice files:
     config_met_interp = false
     config_input_sst = true
     config_frac_seaice = true
-/
-&data_sources
-    config_met_prefix = 'FILE'
-    config_sfc_prefix = 'FILE'       ! Or separate surface prefix
 /
 ```
 
@@ -1026,7 +1047,8 @@ Orientation-angle: 100.
 |---|---|---|
 | `circle` | Center point + radius | Circular region |
 | `ellipse` | Center + semi-axes + orientation | Elliptical region |
-| `custom` | List of lat/lon vertices | Arbitrary polygon |
+| `channel` | Upper/lower latitude bounds | Equatorial/latitudinal band |
+| `custom` | List of lat/lon vertices | Arbitrary convex polygon |
 
 **Extract regional mesh:**
 ```bash
@@ -1159,7 +1181,20 @@ plt.title("MPAS 2-m Temperature")
 plt.savefig("mpas_t2m.png", dpi=150, bbox_inches="tight")
 ```
 
-### Approach 3: VAPOR (3D Interactive)
+### Approach 3: ParaView (3D Interactive)
+
+ParaView has a built-in **NetCDFMPASreader** that directly reads MPAS unstructured output. For more control, use the MPAS-Tools VTK extractor:
+
+```bash
+# Using mpas_tools Python package
+python -m mpas_tools.viz.paraview_extractor \
+    --filename_pattern "history.*.nc" \
+    --mesh_filename init.nc \
+    --variable_list temperature,uReconstructZonal \
+    --dimension_list nCells,nVertLevels
+```
+
+### Approach 4: VAPOR (3D Interactive)
 
 NCAR's VAPOR supports direct import of MPAS unstructured output for interactive 3D visualization.
 
@@ -1370,7 +1405,11 @@ grep -i "error\|abort\|nan" log.atmosphere.0000.err
 - [MPAS Limited-Area Tool](https://github.com/MiCurry/MPAS-Limited-Area)
 - [convert_mpas](https://github.com/mgduda/convert_mpas)
 - [MPAS-Atmosphere Release Notes](https://mpas-dev.github.io/atmosphere/mpas-a_release_notes.html)
+- [MPAS Tutorial (Howard University 2024)](https://www2.mmm.ucar.edu/projects/mpas/tutorial/Howard2024/index.html)
 - [MPAS Tutorial (Boulder 2019)](https://www2.mmm.ucar.edu/projects/mpas/tutorial/Boulder2019/index.html)
 - [WRF & MPAS-A Support Forum](https://forum.mmm.ucar.edu/)
 - [NCAR MPAS Page](https://www.mmm.ucar.edu/models/mpas)
+- [MPAS Visualization Scripts](https://mpas-dev.github.io/atmosphere/visualization.html)
+- [MPAS-Atmosphere Test Cases (v7.0)](https://www2.mmm.ucar.edu/projects/mpas/test_cases/v7.0/)
+- [MPAS Static Data](https://www2.mmm.ucar.edu/projects/mpas/mpas_static.tar.bz2)
 - Skamarock et al. (2012): "A Multiscale Nonhydrostatic Atmospheric Model Using Centroidal Voronoi Tesselations and C-Grid Staggering", MWR
