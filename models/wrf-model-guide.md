@@ -327,6 +327,242 @@ time_step (seconds) = 6 x dx (km)
 | **When to use** | Nest covers significant portion of parent | Large ratio jumps (> 5:1) |
 | **Max ratio** | ~5:1 | Any (use intermediate nests) |
 
+### Dynamics & Damping Options (`&dynamics`)
+
+The `&dynamics` section controls diffusion, damping, and numerical stability. These are critical for preventing model blow-ups, especially over complex terrain or in high-resolution runs.
+
+**Diffusion:**
+
+| Parameter | Values | Description |
+|---|---|---|
+| `diff_opt` | **1** = simple diffusion (gradient on model levels) | How horizontal diffusion is computed |
+| | **2** = full diffusion (evaluated on constant-z surfaces; recommended for real cases) | |
+| `km_opt` | **1** = constant coefficient | How diffusion coefficient K is computed |
+| | **2** = 1.5-order TKE closure (recommended for LES/dx < 1 km) | |
+| | **3** = Smagorinsky first-order (requires `diff_opt=2`) | |
+| | **4** = horizontal Smagorinsky, vertical from PBL (recommended for most real cases) | |
+| `diff_6th_opt` | **0** = off | 6th-order numerical diffusion — removes 2Δx noise |
+| | **1** = on (applied everywhere) | |
+| | **2** = on (not applied in vertical; recommended) | |
+| `diff_6th_factor` | 0.12 (default) | Strength of 6th-order diffusion. Increase to 0.2–0.25 for noisy runs. |
+
+**Damping (upper boundary):**
+
+| Parameter | Values | Description |
+|---|---|---|
+| `damp_opt` | **0** = no upper damping | Prevents wave reflection from model top |
+| | **1** = increased diffusion in upper layers | |
+| | **2** = Rayleigh relaxation (recommended for dx > ~5 km) | |
+| | **3** = w-Rayleigh (damps vertical velocity only; recommended for convection-permitting) | |
+| `dampcoef` | 0.2 (typical) | Damping coefficient. For `damp_opt=2,3`: inverse e-folding time (1/s); 0.01–0.2. |
+| `zdamp` | 5000 (m) | Depth of damping layer below model top |
+
+**Stability controls:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `w_damping` | 0 | Vertical velocity damping. Set to **1** to stabilize runs with strong convection or steep terrain. |
+| `epssm` | 0.1 | Off-centering for vertical sound waves. Increase to **0.2–0.5** for complex terrain to reduce CFL errors. |
+| `smdiv` | 0.1 | Divergence damping. Increase up to 0.2 for stability. |
+| `emdiv` | 0.01 | External-mode divergence damping. |
+| `time_step_sound` | 0 (auto) | Number of sound steps per time step. Auto-calculated from CFL. Override with 4–6 if unstable. |
+
+**Typical `&dynamics` for real cases:**
+```
+&dynamics
+ hybrid_opt           = 2,          ! Hybrid sigma-pressure vertical coordinate (v4.0+)
+ diff_opt             = 2, 2,
+ km_opt               = 4, 4,
+ diff_6th_opt         = 2, 2,
+ diff_6th_factor      = 0.12, 0.12,
+ damp_opt             = 3,
+ zdamp                = 5000., 5000.,
+ dampcoef             = 0.2, 0.2,
+ w_damping            = 1,
+ epssm                = 0.1, 0.1,
+/
+```
+
+> **`hybrid_opt = 2`** (available since v4.0): Uses hybrid sigma-pressure vertical coordinate instead of pure terrain-following sigma. Significantly reduces pressure-gradient errors over steep terrain. **Recommended for all real-data runs.**
+
+### Vertical Level Configuration
+
+WRF uses **terrain-following eta (η) levels** where η=1 at the surface and η=0 at the model top. The distribution of levels controls how well the model resolves the boundary layer, jet streams, and the tropopause.
+
+**Default behavior:** If you only set `e_vert` (number of levels), WRF auto-generates levels using `dzstretch_s` (surface stretching) and `dzstretch_d` (deep stretching).
+
+| Parameter | Default | Description |
+|---|---|---|
+| `e_vert` | 45 | Total number of vertical levels (all domains must match) |
+| `p_top_requested` | 5000 (Pa) | Model top pressure. 5000 Pa ≈ 50 km. Use 1000–2000 Pa for stratospheric studies. |
+| `dzstretch_s` | 1.1 | Stretching factor near surface. Lower = more levels in PBL. |
+| `dzstretch_d` | 1.1 | Stretching factor aloft. |
+| `auto_levels_opt` | 2 | Level generation algorithm. 2 = improved (v4.1+). |
+
+**Custom eta levels — manual specification:**
+
+For full control, specify all eta values explicitly in `namelist.input`:
+```
+&domains
+ e_vert           = 51,
+ eta_levels       = 1.000, 0.9975, 0.995, 0.990, 0.985,
+                    0.980, 0.970, 0.960, 0.945, 0.930,
+                    0.910, 0.890, 0.865, 0.840, 0.810,
+                    0.780, 0.750, 0.715, 0.680, 0.640,
+                    0.600, 0.560, 0.520, 0.480, 0.440,
+                    0.400, 0.365, 0.330, 0.300, 0.270,
+                    0.240, 0.215, 0.190, 0.170, 0.150,
+                    0.130, 0.115, 0.100, 0.085, 0.070,
+                    0.060, 0.050, 0.040, 0.030, 0.023,
+                    0.016, 0.010, 0.006, 0.003, 0.001,
+                    0.000,
+/
+```
+
+**Guidelines for vertical level design:**
+
+| Purpose | Recommendation |
+|---|---|
+| PBL resolution | At least **8–10 levels** below 1 km AGL. First level at ~10–20 m. |
+| Convection-permitting | 50–80 levels. Dense spacing in PBL and near tropopause. |
+| JMA-style (MSM) | 96 levels with ~20 m first level and 37.5 km model top. |
+| Climate downscaling | 40–50 levels sufficient. |
+| Urban / LES | 80+ levels. First level at ~5 m. Very fine spacing in lowest 500 m. |
+
+> **Common mistake:** Too few levels in the PBL (lowest 1–2 km). This causes poor representation of the nocturnal boundary layer, low-level jets, and surface fluxes. If your 2-m temperature or 10-m wind verification is poor, check your lowest-level spacing first.
+
+### Lateral Boundary Conditions
+
+Lateral boundary conditions (LBCs) feed external data into the outermost domain. The outermost domain is the only one that needs LBCs — nested domains get their boundaries from the parent.
+
+**Types (`specified_bdy`):**
+
+| Type | Setting | Description |
+|---|---|---|
+| **Specified** | `specified = .true.` (default for real cases) | Values at boundary come from external data (GFS, ERA5, etc.). Relaxation zone blends external data with model solution. Standard for all real-weather runs. |
+| **Periodic** | `periodic_x = .true.` and/or `periodic_y = .true.` | Wrap-around boundaries. For idealized simulations (e.g., channel flow, squall lines). |
+| **Open** | `open_xs = .true.`, etc. | Radiation/open boundary — waves pass through. For idealized cases. |
+| **Symmetric** | `symmetric_xs = .true.`, etc. | Mirror boundary. For idealized cases. |
+
+**Relaxation zone (`spec_bdy_width`):**
+
+```
+&bdy_control
+ spec_bdy_width  = 5,        ! Number of grid points in relaxation zone (default 5)
+ spec_zone       = 1,        ! Points with full specification (default 1)
+ relax_zone      = 4,        ! Points with relaxation/nudging blend (default 4)
+ specified       = .true.,  .false.,
+ nested          = .false., .true.,
+/
+```
+
+- `spec_bdy_width = spec_zone + relax_zone`
+- Larger relaxation zone (8–10 points) helps prevent boundary artifacts for long simulations
+- Nested domains always use `nested = .true.` — they get their LBCs from the parent domain
+
+**Boundary update frequency (`interval_seconds`):**
+
+| Source Data | Typical `interval_seconds` | Notes |
+|---|---|---|
+| GFS FNL (6-hourly) | 21600 | Standard. WRF linearly interpolates between updates. |
+| ERA5 (1-hourly) | 3600 | Better for rapid weather changes. |
+| GFS forecast (3-hourly) | 10800 | Good temporal resolution. |
+
+> **Important:** Coarse temporal LBC updates (e.g., 6-hourly) can cause boundary artifacts — sudden jumps in wind/temperature every 6 hours that propagate inward. If you see periodic noise near boundaries, increase `interval_seconds` by using higher-frequency input data, or increase `spec_bdy_width`.
+
+### Restart & Cycling Runs
+
+**Restart runs** let you break long simulations into segments, resume after crashes, or branch experiments from a checkpoint.
+
+**Namelist configuration:**
+```
+&time_control
+ ! --- Initial run ---
+ restart              = .false.,
+ restart_interval     = 720,          ! Write restart file every 720 min (12 hr)
+ io_form_restart      = 2,            ! NetCDF format
+
+ ! --- Restart run (change these) ---
+ ! restart             = .true.,
+ ! start_year/month/day/hour = restart time
+ ! (keep end time as original)
+/
+```
+
+**Restart procedure:**
+```bash
+# 1. Locate restart file
+ls wrfrst_d01_2024-01-16_00:00:00
+
+# 2. Edit namelist.input
+#    - Set restart = .true.
+#    - Set start time to match restart file timestamp
+#    - Keep end time unchanged
+
+# 3. Run wrf.exe (do NOT re-run real.exe)
+mpirun -np 64 ./wrf.exe
+```
+
+**Key rules:**
+- Restart files must match the exact domain configuration (grid size, physics, vertical levels)
+- For restart files > 4 GB: use `io_form_restart = 102` (parallel NetCDF)
+- Physics options can generally be changed between restart segments, but microphysics changes may cause instabilities
+- If you change physics, consider a short spin-up period in the new segment
+
+**Cycling (continuous forecasting):**
+
+For operational-style cycling (e.g., 6-hourly analysis-forecast cycles):
+```
+Cycle 1: real.exe -> wrf.exe (00Z–06Z) -> wrfout at 06Z
+              |
+Cycle 2: wrfout(06Z) -> WRF-DA -> updated wrfinput -> wrf.exe (06Z–12Z)
+              |
+Cycle 3: wrfout(12Z) -> WRF-DA -> updated wrfinput -> wrf.exe (12Z–18Z)
+              ...
+```
+
+Each cycle uses the previous forecast as the first guess for data assimilation, producing improved initial conditions.
+
+### SST Update for Multi-Day Runs
+
+By default, WRF uses a static SST from the initial condition throughout the entire simulation. For runs longer than ~48 hours over ocean, time-varying SST significantly improves surface fluxes and maritime weather.
+
+**Enable SST update:**
+```
+&physics
+ sst_update = 1,
+/
+
+&time_control
+ auxinput4_inname     = "wrflowinp_d<domain>"
+ auxinput4_interval   = 360, 360,    ! SST update interval (minutes)
+ io_form_auxinput4    = 2,
+/
+```
+
+**Workflow:**
+```bash
+# 1. Include SST data in WPS processing
+#    (GFS already contains SST; ERA5 requires surface-level files)
+
+# 2. real.exe will automatically create wrflowinp_d01 if it detects
+#    time-varying SST fields in met_em files
+
+# 3. Verify:
+ncdump -h wrflowinp_d01 | grep SST
+```
+
+**Fields updated from `wrflowinp`:**
+
+| Field | Description |
+|---|---|
+| SST | Sea surface temperature |
+| VEGFRA | Vegetation fraction (seasonal) |
+| ALBEDO | Surface albedo (seasonal) |
+| LAI | Leaf area index |
+
+> **Tip:** For tropical cyclone simulations, SST update is essential — storm-induced cooling from ocean mixing can reduce TC intensity by 20–50%. Consider coupling with an ocean model (WRF-Hydro or POM) for full feedback.
+
 ---
 
 ## 5. Physics Options Reference
@@ -361,6 +597,20 @@ time_step (seconds) = 6 x dx (km)
 
 > **Critical:** Turn OFF cumulus parameterization when dx < ~4 km. Use scale-aware schemes (Grell-Freitas) in the "grey zone" (4–10 km).
 
+### Shallow Cumulus (`shcu_physics`)
+
+Separate parameterization for shallow (non-precipitating) convection. Most PBL and deep cumulus schemes already include some shallow convection treatment, so this is only needed in specific configurations.
+
+| Value | Scheme | Description |
+|---|---|---|
+| 0 | **None** (default) | Shallow convection handled internally by PBL scheme (MYNN-EDMF) or cumulus scheme (KF). Sufficient for most applications. |
+| -1 | Use `cu_physics` | Relies on the deep cumulus scheme to also handle shallow convection. Works with KF and Grell-Freitas. |
+| 2 | UW (Park & Bretherton) | University of Washington scheme. Mass-flux approach based on convective inhibition and TKE. Good for marine stratocumulus transition to trade cumulus. Used in CESM/CAM. |
+| 3 | GRIMS (Global/Regional) | Korean GRIMS shallow convection. Mass-flux with moisture-convergence closure. |
+| 5 | **Deng (MYNN-based)** | Designed specifically for WRF-Solar. Uses MYNN TKE to drive shallow cumulus mass flux. Requires MYNN (`bl_pbl_physics=5`) or MYJ (`bl_pbl_physics=2`) PBL. Improves cloud-radiation interaction for solar irradiance forecasting. |
+
+> **When to use:** Only activate `shcu_physics` if your deep cumulus scheme does not handle shallow convection (e.g., BMJ) or if you need explicit control for solar/marine applications. Using `shcu_physics=5` with MYNN PBL is recommended for WRF-Solar.
+
 ### Planetary Boundary Layer (`bl_pbl_physics`)
 
 | Value | Scheme | Type | Paired SfcLay | Description |
@@ -374,6 +624,20 @@ time_step (seconds) = 6 x dx (km)
 > **v4.7 note:** MYNN-EDMF is now a git submodule, refactored to k-only scheme (10–15% faster). Module names changed from `*_mynn_*` to `*_mynnedmf_*`.
 
 > **Important:** PBL scheme MUST be paired with the correct surface layer scheme.
+
+### Surface Layer (`sf_sfclay_physics`)
+
+The surface layer scheme computes friction velocity, exchange coefficients, and surface fluxes (heat, moisture, momentum) that are passed to the PBL scheme. Each PBL scheme requires a specific compatible surface layer.
+
+| Value | Scheme | Compatible PBL | Description |
+|---|---|---|---|
+| 1 | **Revised MM5** | YSU (1), BouLac (8) | Monin-Obukhov similarity theory with Carlson-Boland viscous sub-layer and standard stability functions (Paulson 1970, Dyer-Hicks, Webb). Computes bulk transfer coefficients for heat, moisture, and momentum over land and water. The most widely used surface layer scheme. |
+| 2 | **Eta Similarity** | MYJ (2) | Janjic's Monin-Obukhov implementation from the Eta/NAM model. Iterative solution for surface fluxes with Zilitinkevich thermal roughness. More conservative (lower) surface fluxes than MM5 in strong instability. Required for MYJ PBL. |
+| 5 | **MYNN** | MYNN-EDMF (5) | Nakanishi-Niino surface layer. Similar to Eta similarity but with improved roughness length formulation over water (Charnock + viscous) and better handling of very stable conditions. Includes sub-grid cloud fraction coupling. Required for MYNN PBL. |
+| 7 | **Pleim-Xiu** | ACM2 (7) | Designed for EPA air quality modeling. Uses Pleim (2006) stability functions optimized for the ACM2 PBL. Indirect soil moisture adjustment from 2-m observations. Required for ACM2 PBL. |
+| 91 | **Old MM5** | Any (legacy) | Original MM5 surface layer without viscous sub-layer. Retained for backwards compatibility only. Not recommended for new simulations. |
+
+> **Rule:** Always check the PBL–surface layer pairing. Using mismatched schemes (e.g., MYNN PBL with MM5 surface layer) will produce physically inconsistent results — the model may run but surface fluxes will be wrong.
 
 ### Radiation
 
@@ -396,6 +660,108 @@ Set `radt` (radiation interval, minutes) approximately equal to `dx` in km. Neve
 | 5 | CLM4 | 10 | Community Land Model v4 (from NCAR CESM). 10 soil layers to 3.4 m depth, up to 5 snow layers, sophisticated biogeophysics (photosynthesis-conductance, urban canopy). Most detailed treatment of sub-grid land heterogeneity (PFTs). Computationally expensive. Best for climate and long-duration simulations. |
 | 7 | Pleim-Xiu | 2 | Two-layer soil model with indirect soil moisture nudging from observed 2-m temperature/humidity. Designed for EPA air quality modeling chain (pairs with ACM2 PBL). Supports 61-category MODIS LCZ in v4.7 for urban studies. |
 
+### Urban Canopy Model (`sf_urban_physics`)
+
+Urban physics parameterizations represent the effects of buildings, streets, and urban materials on surface energy balance, wind flow, and temperature. Essential for urban heat island (UHI) studies and city-scale weather forecasting.
+
+| Value | Scheme | Description |
+|---|---|---|
+| 0 | **None** (default) | Urban grid cells treated as rough, impervious land surface by the LSM. Adequate if urban areas are not the focus. |
+| 1 | **Single-layer UCM** | Single-layer Urban Canopy Model. Represents a simplified urban canyon (roof, wall, road) with bulk energy balance. Accounts for shadowing, reflection, and anthropogenic heat. Moderate computational cost. Good starting point for UHI studies. |
+| 2 | **BEP** (Multi-layer) | Building Energy Parameterization. Multi-layer scheme where buildings interact with multiple atmospheric levels — not just the surface. Explicitly resolves drag, turbulence, and radiation trapping at each building level. Requires `bl_pbl_physics = 2 or 8` (local TKE schemes only). |
+| 3 | **BEP+BEM** | BEP with Building Energy Model. Adds indoor energy budget — HVAC systems, waste heat, indoor temperature. Captures anthropogenic heat release from air conditioning. Most realistic for megacity simulations and energy demand studies. Requires `bl_pbl_physics = 2 or 8`. |
+
+**Key settings:**
+```
+&physics
+ sf_urban_physics   = 1, 1,          ! UCM option
+ use_wudapt_lcz     = 1,             ! Use WUDAPT Local Climate Zones (v4.3+)
+ num_urban_layers   = 1040,          ! Number of urban layers (BEP/BEM only)
+/
+```
+
+**Land use requirements:**
+- UCM requires urban land-use categories in the WPS static data
+- **WUDAPT LCZ** (Local Climate Zones) provides 10 urban sub-categories (compact high-rise, open low-rise, etc.) instead of a single "urban" class — greatly improves UHI representation
+- v4.7: Pleim-Xiu LSM now supports 61-category MODIS with LCZ
+
+> **BEP/BEM constraint:** Only works with local TKE-based PBL schemes (MYJ=2 or BouLac=8) because multi-layer urban drag directly modifies the vertical diffusion profile. Non-local schemes (YSU) are incompatible.
+
+### Ocean Physics (`sf_ocean_physics`)
+
+Simple ocean mixed-layer models that provide SST feedback without requiring a full ocean model coupling. Useful for tropical cyclone simulations where storm-induced ocean cooling affects intensity.
+
+| Value | Scheme | Description |
+|---|---|---|
+| 0 | **None** (default) | SST is prescribed (static or from `sst_update`). No ocean response to atmospheric forcing. Fine for most applications over land or short runs. |
+| 1 | **Simple Mixed-Layer** | 1D mixed-layer ocean model. Prognostic SST responds to surface heat/momentum fluxes. Fixed mixed-layer depth (set by `ocean_z_levels` or from initialization). Captures basic storm-induced SST cooling. Low cost. |
+| 2 | **3D Price-Weller-Pinkel** | 3D ocean mixed-layer model with horizontal advection. Better representation of ocean current response and upwelling under tropical cyclones. More realistic SST cooling pattern (cold wake). Higher cost but still much cheaper than full ocean coupling. |
+
+**Namelist example:**
+```
+&physics
+ sf_ocean_physics     = 1,
+ oml_hml0             = 50,        ! Initial mixed-layer depth (m)
+ oml_gamma            = 0.14,      ! Temperature lapse rate below mixed layer (K/m)
+/
+```
+
+> **When to use:** Primarily for tropical cyclone studies lasting > 48 hours, where SST cooling by 1–3°C under the storm eye significantly reduces intensity. For runs over land-dominated domains, keep `sf_ocean_physics = 0`.
+
+### Gravity Wave Drag (`gwd_opt`)
+
+Parameterizes the drag on the large-scale flow caused by sub-grid terrain-generated gravity waves that propagate vertically and break aloft. Important at coarser resolutions where individual mountain features are not resolved.
+
+| Value | Scheme | Description |
+|---|---|---|
+| 0 | **None** (default) | No gravity wave drag. Acceptable for high-resolution (dx < ~10 km) where terrain is well resolved, or for flat domains. |
+| 1 | **GWD** | Gravity wave drag + low-level blocking. Based on Kim & Arakawa (1995). Represents both mountain wave breaking aloft (decelerates upper-level flow) and flow blocking around sub-grid orography (decelerates low-level flow). |
+| 3 | **GWD + Small-scale GWD** | Adds sub-grid scale orographic drag from small terrain features not captured even by the resolved terrain. Developed for the Unified Forecast System (UFS). New in v4.6. |
+
+**When to activate:**
+- dx > ~20 km: **Recommended** — sub-grid mountains have significant unresolved drag
+- dx 10–20 km: Consider enabling if domain has significant topography
+- dx < 10 km: Generally not needed — terrain is well-resolved
+
+```
+&physics
+ gwd_opt = 1,
+/
+```
+
+### Land Use / Land Cover Datasets
+
+WRF uses land use categories for surface properties (albedo, roughness, emissivity, soil type). The dataset is chosen during WPS geogrid processing.
+
+**Available datasets:**
+
+| Dataset | Categories | Description |
+|---|---|---|
+| **MODIS** (default) | 20 (+1 lake) | MODIS-based IGBP land classification at 30-arc-second (~1 km). Default since WRF v3.8. Includes 1 urban category. Modern and globally consistent. |
+| **USGS** | 24 (+1 lake) | USGS 24-category land use at 30-arc-second. Legacy dataset from 1990s AVHRR. 3 urban categories (commercial, residential, industrial). Some users prefer it for urban studies, though WUDAPT LCZ is now better. |
+| **MODIS + LCZ** | 20 + 10 LCZ | MODIS with WUDAPT Local Climate Zone urban sub-categories. 10 built types (compact high-rise through lightweight low-rise) and 7 land types. Best for urban heat island studies. Requires `use_wudapt_lcz = 1`. |
+| **NLCD** (US only) | 40 | National Land Cover Database. 30-m resolution, US-only. Most detailed land cover for CONUS simulations. Requires NLCD-to-WRF conversion. |
+
+**Selection in geogrid:**
+```
+&geogrid
+ geog_data_res = 'modis_lakes+15s+modis_fpar+modis_lai', 'modis_lakes+15s+modis_fpar+modis_lai',
+/
+```
+
+**Switching between MODIS and USGS:**
+
+In `GEOGRID.TBL`, the `landuse_*` entry controls which dataset is used. MODIS is the default. To use USGS:
+```
+ rel_path = default:landuse_30s/
+```
+changes to:
+```
+ rel_path = usgs:landuse_30s_with_lakes/
+```
+
+> **Recommendation:** Use MODIS (default) for most applications. Switch to MODIS+LCZ for urban studies. Only use USGS if you have legacy configurations that depend on the 24-category classification.
+
 ### Recommended Combinations
 
 **General-purpose research (dx > 10 km):**
@@ -407,6 +773,8 @@ sf_sfclay_physics  = 1      (Revised MM5)
 ra_lw_physics      = 4      (RRTMG)
 ra_sw_physics      = 4      (RRTMG)
 sf_surface_physics = 4      (Noah-MP)
+sf_urban_physics   = 0      (off, unless studying urban areas)
+gwd_opt            = 1      (gravity wave drag ON for coarse grids)
 ```
 
 **Convection-permitting (dx < 4 km):**
@@ -418,6 +786,50 @@ sf_sfclay_physics  = 5      (MYNN)
 ra_lw_physics      = 4      (RRTMG)
 ra_sw_physics      = 4      (RRTMG)
 sf_surface_physics = 4      (Noah-MP)
+sf_urban_physics   = 0      (or 1 UCM for urban domains)
+gwd_opt            = 0      (terrain well-resolved at this scale)
+```
+
+**Tropical cyclone (ocean-dominant):**
+```
+mp_physics         = 8      (Thompson)
+cu_physics         = 3      (Grell-Freitas, scale-aware for multi-nest)
+bl_pbl_physics     = 1      (YSU)
+sf_sfclay_physics  = 1      (Revised MM5)
+ra_lw_physics      = 4      (RRTMG)
+ra_sw_physics      = 4      (RRTMG)
+sf_surface_physics = 2      (Noah)
+sf_ocean_physics   = 1      (mixed-layer for SST feedback)
+isftcflx           = 1      (modified surface exchange coefficients for high wind)
+sst_update         = 1      (time-varying SST)
+```
+
+**Urban heat island study:**
+```
+mp_physics         = 8      (Thompson)
+cu_physics         = 0      (OFF, convection-permitting)
+bl_pbl_physics     = 2      (MYJ — required for BEP/BEM)
+sf_sfclay_physics  = 2      (Eta Similarity)
+ra_lw_physics      = 4      (RRTMG)
+ra_sw_physics      = 4      (RRTMG)
+sf_surface_physics = 2      (Noah)
+sf_urban_physics   = 2      (BEP multi-layer) or 3 (BEP+BEM)
+use_wudapt_lcz    = 1      (Local Climate Zones for urban sub-categories)
+```
+
+**Solar energy forecasting:**
+```
+mp_physics         = 28     (Thompson Aerosol-Aware)
+cu_physics         = 3      (Grell-Freitas)
+bl_pbl_physics     = 5      (MYNN-EDMF)
+sf_sfclay_physics  = 5      (MYNN)
+shcu_physics       = 5      (Deng shallow cumulus — improves cloud-radiation)
+ra_lw_physics      = 4      (RRTMG)
+ra_sw_physics      = 4      (RRTMG)
+swint_opt          = 2      (FARMS sub-timestep irradiance)
+aer_opt            = 1      (aerosol climatology)
+sf_surface_physics = 4      (Noah-MP)
+solar_diagnostics  = 1      (output GHI, DNI, DHI)
 ```
 
 ---
