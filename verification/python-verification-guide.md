@@ -9,6 +9,7 @@
 ## Table of Contents
 
 1. [Introduction & Scope](#1-introduction--scope)
+   - [Recommended Methods by Product](#recommended-verification-methods-by-product)
 2. [Environment Setup](#2-environment-setup)
 3. [Loading NWP Data](#3-loading-nwp-data)
    - [GRIB2](#31-grib2-via-cfgrib--xarray)
@@ -56,6 +57,167 @@ For formula derivations and metric interpretation, see the companion [Forecast V
 | **Customization** | Total control | Config-driven, less flexible |
 
 **Rule of thumb:** Start with Python for exploration. Graduate to MET when you need operational reliability, MODE/MTD, or TC tools.
+
+### Recommended Verification Methods by Product
+
+Use this as a quick decision guide: **what variable am I verifying, against what type of observations, and which methods should I use?**
+
+#### Temperature
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **2-m temp vs. stations** | Continuous (point) | ME, MAE, RMSE, r | `continuous_metrics()` | Point-Stat (CNT) |
+| **2-m temp vs. analysis grid** | Continuous (gridded) + spatial error maps | ME, RMSE per grid point | `continuous_metrics()` + `plot_spatial_comparison()` | Grid-Stat (CNT), Series-Analysis |
+| **Upper-air temp vs. radiosondes** | Continuous by level + ACC | ME, RMSE, ACC per pressure level | `continuous_metrics()`, `anomaly_correlation()` | Point-Stat (CNT, SAL1L2) |
+| **Upper-air height (Z500) vs. analysis** | Anomaly Correlation | ACC by lead time | `anomaly_correlation()` | Grid-Stat (SAL1L2) → Stat-Analysis |
+
+#### Wind
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **10-m wind speed vs. stations** | Continuous (point) | ME, MAE, RMSE | `continuous_metrics()` | Point-Stat (CNT) |
+| **10-m wind direction vs. stations** | Circular statistics | Dir MAE, Dir Bias | `wind_direction_mae()`, `wind_direction_bias()` | Point-Stat (VCNT) |
+| **10-m U/V components vs. stations** | Vector verification | VRMSE, speed bias, U/V ME | `vector_wind_metrics()` | Point-Stat (VL1L2, VCNT) |
+| **Wind field vs. analysis grid** | Vector gridded | VRMSE spatial map | `vector_wind_metrics()` per grid point | Grid-Stat (VL1L2, VCNT) |
+| **Upper-air wind (jet stream)** | Continuous by level | RMSE, speed bias per level | `continuous_metrics()`, `vector_wind_metrics()` | Point-Stat (VL1L2) |
+
+> **Tip:** Always verify wind using **both** speed and direction (or U/V components). A model can have good speed RMSE but poor direction, or vice versa. Verifying U/V components via `vector_wind_metrics()` captures both simultaneously.
+
+#### Precipitation
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **QPF vs. rain gauges (point)** | Categorical at multiple thresholds | POD, FAR, CSI, ETS, FBIAS per threshold | `contingency_table()` + `categorical_metrics()` | Point-Stat (CTC, CTS) |
+| **QPF vs. radar/gauge analysis (gridded)** | Categorical + neighborhood (FSS) | CSI, ETS + FSS by scale | `categorical_metrics()`, `fractions_skill_score()` | Grid-Stat (CTS, NBRCTS) |
+| **QPF spatial features (storms, fronts)** | Object-based | Centroid distance, area ratio, intensity ratio | — (use MET) | MODE, MTD |
+| **QPF by spatial scale** | Scale decomposition | Skill per scale | `fss_by_scale()` | Wavelet-Stat, Grid-Stat (NBRCTS) |
+| **Precipitation amount (continuous)** | Continuous (for rain-only subset) | ME, MAE for cases with rain > 0 | `continuous_metrics()` on filtered data | Point-Stat (CNT, filtered) |
+| **Probabilistic QPF (ensemble prob.)** | Probabilistic | BSS, reliability, ROC/AUC | `brier_score()`, `reliability_data()`, `compute_roc()` | Grid-Stat (PSTD, PRC) |
+
+> **Key principle for precipitation:** Never use only continuous metrics (RMSE) for precipitation — they're dominated by the zero/non-zero distinction. Always start with **categorical metrics at multiple thresholds** (e.g., 0.1, 1, 5, 10, 25, 50 mm). Add **FSS** when using gridded observations to assess spatial displacement. Use **MODE** when you care about individual storm features.
+
+#### Radar Reflectivity
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **Simulated vs. observed composite dBZ** | Categorical at dBZ thresholds | POD, FAR, CSI at 20/35/50 dBZ | `contingency_table()` + `categorical_metrics()` | Grid-Stat (CTS) |
+| **Spatial displacement of storms** | FSS at multiple scales | FSS per threshold per scale | `fractions_skill_score()` | Grid-Stat (NBRCTS) |
+| **Storm object matching** | Object-based | Centroid dist, area ratio, max intensity | — (use MET) | MODE |
+| **Storm tracking through time** | 3D object tracking | Volume, speed, timing errors | — (use MET) | MTD |
+
+> **Typical thresholds for reflectivity:** 15 dBZ (any echo), 20 dBZ (light rain), 35 dBZ (moderate/convective), 50 dBZ (severe).
+
+#### Pressure and Geopotential Height
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **MSLP vs. stations** | Continuous | ME, MAE, RMSE | `continuous_metrics()` | Point-Stat (CNT) |
+| **Z500 vs. analysis** | Anomaly correlation | ACC by lead time | `anomaly_correlation()` | Grid-Stat (SAL1L2) |
+| **Z500 gradient (S1 score)** | Gradient verification | S1 score | — (manual or MET) | Grid-Stat (GRAD) |
+
+> **Standard benchmark:** ACC = 0.6 at 500 hPa is the traditional threshold for "useful" synoptic-scale skill. Most global models reach this around Day 6–8.
+
+#### Humidity and Dewpoint
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **2-m dewpoint vs. stations** | Continuous | ME, MAE, RMSE, r | `continuous_metrics()` | Point-Stat (CNT) |
+| **Relative humidity (upper-air)** | Continuous by level | ME, RMSE per level | `continuous_metrics()` | Point-Stat (CNT) |
+| **Fog occurrence (visibility < 1 km)** | Categorical | POD, FAR, CSI, FBIAS | `categorical_metrics()` with vis threshold | Point-Stat (CTS) |
+
+#### Sea State and Waves
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **Significant wave height (Hs) vs. buoys** | Continuous + scatter index | ME, RMSE, SI, r | `continuous_metrics()`, see SI below | Point-Stat (CNT) |
+| **Wave period vs. buoys** | Continuous | ME, MAE, RMSE | `continuous_metrics()` | Point-Stat (CNT) |
+| **Wave direction vs. buoys** | Circular | Dir MAE, Dir Bias | `wind_direction_mae()` (reuse for wave dir) | Point-Stat (VCNT) |
+| **Hs field vs. satellite altimetry** | Continuous (gridded) | ME, RMSE, SI spatial maps | Series-Analysis style loop | Grid-Stat (CNT) |
+
+```python
+def scatter_index(fcst, obs):
+    """Scatter Index: normalized RMSE, standard metric for wave verification.
+
+    SI = RMSE(unbiased) / mean(obs)
+    Where unbiased RMSE = sqrt(RMSE² - bias²)
+    """
+    f, o = np.asarray(fcst), np.asarray(obs)
+    bias = np.mean(f - o)
+    rmse = np.sqrt(np.mean((f - o)**2))
+    rmse_unbiased = np.sqrt(rmse**2 - bias**2)
+    return rmse_unbiased / np.mean(o) if np.mean(o) > 0 else np.nan
+```
+
+> **Standard for wave verification:** Scatter Index (SI) < 10% is excellent, 10–15% is good, >20% needs investigation.
+
+#### Sea Surface Temperature (SST)
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **SST vs. buoys/ships** | Continuous (point) | ME, MAE, RMSE, r | `continuous_metrics()` | Point-Stat (CNT) |
+| **SST vs. satellite analysis** | Continuous (gridded) + spatial pattern | ME, RMSE, ACC, spatial correlation | `continuous_metrics()`, `anomaly_correlation()` | Grid-Stat (CNT, SAL1L2) |
+
+#### Ensemble Forecasts (Any Variable)
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **Calibration (is spread adequate?)** | Rank histogram + PIT | Histogram flatness | `rank_histogram()`, `pit_histogram()` | Ensemble-Stat (RHIST, PHIST) |
+| **Overall probabilistic skill** | CRPS | CRPS, CRPSS | `crps_ensemble()`, `crpss()` | Ensemble-Stat (ECNT) |
+| **Spread-skill consistency** | Binned spread vs. RMSE | Spread/RMSE ratio | `spread_skill()` | Ensemble-Stat (SSVAR) |
+| **Probabilistic events (rain > 10 mm)** | BSS + reliability + ROC | BSS, AUC, reliability | `brier_score()`, `compute_roc()`, `reliability_data()` | Ensemble-Stat → Grid-Stat (PSTD, PRC) |
+| **Multi-category (tercile forecasts)** | RPS | RPS, RPSS | `ranked_probability_score()` | Ensemble-Stat (RPS) |
+
+> **Ensemble verification recipe:** Always start with the **rank histogram** (is the ensemble well-calibrated?), then **CRPS** (overall skill), then **spread-skill** (does spread predict error?). Add BSS/ROC for specific event thresholds.
+
+#### Tropical Cyclones
+
+| Scenario | Recommended Methods | Key Metrics | Python Function | MET Tool |
+|---|---|---|---|---|
+| **Track position** | Great-circle distance | Track error (km) by lead time | — (use MET) | TC-Pairs → TC-Stat |
+| **Along/cross-track decomposition** | Track error decomposition | ALTK_ERR, CRTK_ERR | — (use MET) | TC-Stat |
+| **Intensity (max wind)** | Continuous | Max wind error, MSLP error by lead | — (use MET) | TC-Stat |
+| **Genesis** | Categorical (hit/miss/FA) | POD, FAR for genesis events | — (use MET) | TC-Gen |
+| **Radial structure** | Azimuthal profiles | Wind profile vs. RMW | — (use MET) | TC-RMW |
+
+> **Note:** TC verification requires specialized ATCF-format track data and the MET TC tools. Python-only TC verification is impractical for anything beyond simple great-circle track error.
+
+#### Decision Flowchart
+
+```
+What are you verifying?
+│
+├─ Point observations (stations, buoys, radiosondes)?
+│   ├─ Continuous variable (temp, wind speed, pressure, Hs)?
+│   │   └─ continuous_metrics() → ME, MAE, RMSE, r
+│   │       └─ Upper-air with climatology? → anomaly_correlation()
+│   ├─ Wind direction?
+│   │   └─ wind_direction_mae() + wind_direction_bias()
+│   │       OR vector_wind_metrics() on U/V components
+│   ├─ Event threshold (rain > X mm, fog, severe)?
+│   │   └─ categorical_metrics() at multiple thresholds
+│   └─ Probabilistic forecast?
+│       └─ brier_score() + reliability_data() + compute_roc()
+│
+├─ Gridded observations (analysis, radar, satellite)?
+│   ├─ Continuous field?
+│   │   └─ continuous_metrics() per grid point (Series-Analysis style)
+│   │       └─ Pattern match? → anomaly_correlation()
+│   ├─ Precipitation / reflectivity?
+│   │   ├─ categorical_metrics() at thresholds (basic)
+│   │   ├─ fractions_skill_score() at multiple scales (spatial)
+│   │   └─ MODE/MTD for object-based (MET only)
+│   └─ At what spatial scale is my forecast useful?
+│       └─ fss_by_scale() → minimum_useful_scale()
+│
+├─ Ensemble forecast?
+│   ├─ rank_histogram() → is ensemble calibrated?
+│   ├─ crps_ensemble() → overall probabilistic skill
+│   ├─ spread_skill() → does spread predict error?
+│   └─ brier_score() per threshold → event-specific skill
+│
+└─ Tropical cyclone?
+    └─ Use MET: TC-Pairs → TC-Stat → TC-Gen
+```
 
 ---
 
