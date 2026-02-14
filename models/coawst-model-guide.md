@@ -24,6 +24,9 @@
 15. [Sediment Transport (CSTMS)](#15-sediment-transport-cstms)
 16. [Data Download Sources](#16-data-download-sources)
 17. [Project Directory Organization](#17-project-directory-organization)
+18. [Running a Test Case (Inlet_test)](#18-running-a-test-case-inlet_test)
+19. [SWAN Boundary File Preparation](#19-swan-boundary-file-preparation)
+20. [Nesting in COAWST](#20-nesting-in-coawst)
 
 ---
 
@@ -1634,6 +1637,525 @@ COAWST/                              # COAWST source code (git clone)
 - Use relative paths in `coupling_sunda.in` (relative to the directory where you launch `coawstM`).
 - Store scripts that generate grids and forcing — reproducibility matters.
 - For multiple experiments, create separate subdirectories under `Projects/` (e.g., `Sunda_Strait_tides_only/`, `Sunda_Strait_coupled/`).
+
+---
+
+## 18. Running a Test Case (Inlet_test)
+
+Before attempting your own project, run the built-in **Inlet_test** to verify your build works. It's a small, fast test case that exercises ROMS+SWAN coupling with sediment transport.
+
+### What It Simulates
+
+An **idealized tidal inlet** — a narrow channel connecting the open ocean to a back-barrier bay:
+- Sinusoidal ±1 m tidal signal at the north boundary (12-hour period)
+- Constant JONSWAP waves from the north (Hs = 1.0 m, Tp = 10.0 s)
+- One sand class (d50 = 1.0 mm) with bedload and morphodynamic updating
+- Cartesian coordinates, no Coriolis, 12-hour simulation
+
+| Parameter | Value |
+|---|---|
+| Grid | 75 × 70 × 8 levels (curvilinear) |
+| DT (baroclinic) | 60 s |
+| NDTFAST | 20 |
+| Total time steps | 720 (= 12 hours) |
+| Coupling interval | 600 s (10 minutes) |
+| MPI processes | 2 (1 ROMS + 1 SWAN) |
+| Runtime | 1–5 minutes on a modern machine |
+
+### Available Variants
+
+| Variant | Directory | Description |
+|---|---|---|
+| **Coupled** | `Projects/Inlet_test/Coupled/` | Default. ROMS + SWAN on same grid. |
+| **DiffGrid** | `Projects/Inlet_test/DiffGrid/` | ROMS + SWAN on different grids (tests SCRIP interpolation). |
+| **Refined** | `Projects/Inlet_test/Refined/` | Nested/refined grids. |
+| **InWave** | `Projects/Inlet_test/InWave/` | Uses built-in InWave instead of SWAN. |
+| **Swanonly** | `Projects/Inlet_test/Swanonly/` | SWAN-only with nested grids, no ocean. |
+| **WW3** | `Projects/Inlet_test/WW3/` | ROMS + WAVEWATCH III coupling. |
+
+### Step-by-Step: Build and Run (Coupled variant)
+
+#### Step 1: Clone
+
+```bash
+git clone https://github.com/DOI-USGS/COAWST.git
+cd COAWST
+```
+
+#### Step 2: Edit `build_coawst.sh`
+
+Set these variables:
+
+```bash
+COAWST_APPLICATION=INLET_TEST          # must be uppercase
+MY_ROOT_DIR=/path/to/COAWST
+MY_HEADER_DIR=${MY_ROOT_DIR}/Projects/Inlet_test/Coupled
+MY_ANALYTICAL_DIR=${MY_ROOT_DIR}/Projects/Inlet_test/Coupled
+
+FORT=gfortran                           # or ifort
+USE_MPI=on
+USE_MPIF90=on
+which_MPI=openmpi                       # or mpich, intel
+USE_NETCDF4=on
+```
+
+#### Step 3: Compile
+
+```bash
+./build_coawst.sh -j 4
+```
+
+This produces the executable `coawstM` in the root directory.
+
+#### Step 4: Run
+
+```bash
+mpirun -np 2 ./coawstM Projects/Inlet_test/Coupled/coupling_inlet_test.in > inlet_test.log
+```
+
+**Critical:** Run from the COAWST root directory. All file paths in the input files are relative to this location.
+
+#### Step 5: Verify
+
+Check the log for:
+- ROMS initialization header with grid dimensions
+- SWAN initialization messages
+- Time-stepping output (KINETIC_ENRG, POTEN_ENRG columns)
+- Coupling exchange messages every 600 s (10 exchanges total)
+- Clean termination
+
+Check output files:
+- `ocean_his_coupled.nc` — history snapshots
+- `ocean_avg_coupled.nc` — time-averaged fields
+- `*.mat` — SWAN block outputs (Hsig, depth, etc.)
+
+### Key Files in Coupled/
+
+| File | Purpose |
+|---|---|
+| `inlet_test.h` | CPP flags (ROMS_MODEL, SWAN_MODEL, MCT_LIB, SEDIMENT, WEC_VF, etc.) |
+| `ocean_inlet_test.in` | ROMS config (grid, time stepping, physics, output) |
+| `swan_inlet_test.in` | SWAN config (grid, physics, boundaries, output) |
+| `coupling_inlet_test.in` | Coupling config (NnodesWAV=1, NnodesOCN=1, TI=600s) |
+| `sediment_inlet_test.in` | Sediment class properties |
+| `inlet_test_grid.nc` | ROMS grid NetCDF |
+| `inlet_test_grid_coord.grd` | SWAN coordinate file |
+| `inlet_test_bathy.bot` | SWAN bathymetry file |
+
+### Common Beginner Issues
+
+| Issue | Solution |
+|---|---|
+| NetCDF not found | Verify `nf-config --all` works. Set `USE_NETCDF4=on`. |
+| `mpif90` not found | Install MPI and ensure it's on PATH. |
+| SCRIP weight file missing | Pre-generated file should be in the repo. If not, build and run `Lib/SCRIP_COAWST/scrip_coawst`. |
+| Wrong MPI count | `mpirun -np` must equal `NnodesWAV + NnodesOCN` (default 2). |
+| `NtileI × NtileJ ≠ NnodesOCN` | Both must be consistent — default is 1×1 = 1. |
+| File not found errors | Run from the COAWST root, not a subdirectory. |
+| `COAWST_APPLICATION` case mismatch | Must be `INLET_TEST` (uppercase) in build script. |
+
+---
+
+## 19. SWAN Boundary File Preparation
+
+### TPAR Format (Parametric)
+
+The simplest boundary format — bulk wave parameters at each time step. One file per boundary point.
+
+```
+TPAR
+20240901.000000  1.500   8.50  225.00   25.0
+20240901.030000  1.620   8.80  228.00   24.0
+20240901.060000  1.800   9.20  230.00   22.0
+20240901.090000  2.100  10.00  235.00   20.0
+```
+
+| Column | Parameter | Unit |
+|---|---|---|
+| 1 | Time | `YYYYMMDD.HHMMSS` |
+| 2 | Hs | m (significant wave height) |
+| 3 | Tp | s (peak wave period) |
+| 4 | Dir | degrees (direction waves come FROM, clockwise from N) |
+| 5 | Dspr | degrees (directional spreading width) |
+
+First line must be `TPAR`. SWAN interpolates linearly between time steps.
+
+### Spectral Format (.sp2)
+
+Full 2D directional-frequency spectrum. More accurate for multi-modal seas (combined swell + wind sea):
+
+```
+SWAN   1                                Swan standard spectral file
+TIME                                    time-dependent data
+     1                                  time coding option
+LONLAT                                  locations in lon/lat
+     3                                  number of locations
+  105.0000   -7.0000
+  105.0000   -6.5000
+  105.0000   -6.0000
+APTS                                    absolute spectral densities
+    30                                  number of frequencies
+  0.0400  0.0440  0.0484  ...           (frequency bins in Hz)
+    36                                  number of directions
+  0.0000  10.0000  20.0000  ...         (direction bins in degrees)
+QUANT
+     1
+VaDens                                  variance densities
+m2/Hz/degr                              unit
+  -0.9900E+02                           exception value
+20240901.000000                         date and time
+LOCATION     1
+  0.0012  0.0015  0.0008  ...           (nfreq × ndir spectral values)
+LOCATION     2
+  ...
+```
+
+### BOUNDSPEC Command
+
+Place `BOUND SHAPE` before `BOUNDSPEC`:
+
+```
+BOUND SHAPE JONSWAP 3.3 PEAK DSPR DEGREES
+```
+
+#### Constant Spectrum Along One Side
+
+```
+BOUNDSPEC SIDE WEST CONSTANT FILE 'tpar_west.txt' 1
+```
+
+#### Variable Spectrum (Multiple Points Along a Side)
+
+```
+BOUNDSPEC SIDE WEST CCW VARIABLE FILE &
+    'tpar_west/tpar_bnd001.txt' 1 &
+    'tpar_west/tpar_bnd002.txt' 2 &
+    'tpar_west/tpar_bnd003.txt' 3 &
+    'tpar_west/tpar_bnd004.txt' 4 &
+    'tpar_west/tpar_bnd005.txt' 5
+```
+
+`CCW` = counter-clockwise ordering. For `SIDE WEST CCW`, points go from SW corner to NW corner.
+
+#### Multiple Boundaries
+
+```
+! Western boundary (5 TPAR files, S to N)
+BOUNDSPEC SIDE WEST CCW VARIABLE FILE &
+    'tpar_west/tpar_001.txt' 1 &
+    'tpar_west/tpar_002.txt' 2 &
+    'tpar_west/tpar_003.txt' 3 &
+    'tpar_west/tpar_004.txt' 4 &
+    'tpar_west/tpar_005.txt' 5
+
+! Southern boundary (5 TPAR files, W to E)
+BOUNDSPEC SIDE SOUTH CCW VARIABLE FILE &
+    'tpar_south/tpar_001.txt' 1 &
+    'tpar_south/tpar_002.txt' 2 &
+    'tpar_south/tpar_003.txt' 3 &
+    'tpar_south/tpar_004.txt' 4 &
+    'tpar_south/tpar_005.txt' 5
+
+! Northern boundary - constant small waves (sheltered)
+BOUNDSPEC SIDE NORTH CONSTANT PAR 0.5 6.0 0.0 30.0
+
+! Eastern boundary - land, no boundary needed (default = no incoming energy)
+```
+
+#### Using a Spectral File
+
+```
+BOUNDSPEC SIDE WEST CCW VARIABLE FILE 'swan_west_boundary.sp2' 1
+```
+
+### Python: ERA5 to SWAN TPAR
+
+```python
+import numpy as np
+from netCDF4 import Dataset, num2date
+from scipy.interpolate import interpn
+import os
+
+def era5_to_tpar(nc_file, boundary_points, output_dir='./tpar_files',
+                  default_dspr=25.0):
+    """
+    Convert ERA5 wave data to SWAN TPAR files.
+
+    Parameters
+    ----------
+    nc_file : str
+        ERA5 netCDF file with swh, pp1d (or mwp), mwd.
+    boundary_points : list of (lon, lat) tuples
+        Points along the SWAN boundary.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    ds = Dataset(nc_file)
+    lons = np.array(ds.variables['longitude'][:])
+    lats = np.array(ds.variables['latitude'][:])
+    time_var = ds.variables['time']
+    times = num2date(time_var[:], units=time_var.units,
+                      calendar='standard')
+
+    hs = np.array(ds.variables['swh'][:])
+    # Use peak period if available, else mean period
+    if 'pp1d' in ds.variables:
+        tp = np.array(ds.variables['pp1d'][:])
+    else:
+        tp = np.array(ds.variables['mwp'][:]) * 1.1  # Tm01 → Tp approx
+    mwd = np.array(ds.variables['mwd'][:])
+    ds.close()
+
+    # ERA5 lats are often descending — fix for interpolation
+    if lats[0] > lats[-1]:
+        lats = lats[::-1]
+        hs = hs[:, ::-1, :]
+        tp = tp[:, ::-1, :]
+        mwd = mwd[:, ::-1, :]
+
+    pts = np.array([(lat, lon) for lon, lat in boundary_points])
+
+    tpar_files = []
+    for ip, (blon, blat) in enumerate(boundary_points):
+        fname = os.path.join(output_dir, f'tpar_bnd{ip+1:03d}.txt')
+        tpar_files.append(fname)
+
+        with open(fname, 'w') as f:
+            f.write('TPAR\n')
+            for it, t in enumerate(times):
+                hs_val = max(float(interpn((lats, lons), hs[it],
+                         [[blat, blon]])[0]), 0.01)
+                tp_val = max(float(interpn((lats, lons), tp[it],
+                         [[blat, blon]])[0]), 1.0)
+
+                # Circular interpolation for direction (avoid 0/360 wrap)
+                dir_rad = np.deg2rad(mwd[it])
+                sin_val = float(interpn((lats, lons), np.sin(dir_rad),
+                          [[blat, blon]])[0])
+                cos_val = float(interpn((lats, lons), np.cos(dir_rad),
+                          [[blat, blon]])[0])
+                dir_val = np.rad2deg(np.arctan2(sin_val, cos_val)) % 360
+
+                tstr = t.strftime('%Y%m%d.%H%M%S')
+                f.write(f'{tstr} {hs_val:7.3f} {tp_val:7.2f} '
+                        f'{dir_val:7.2f} {default_dspr:6.1f}\n')
+
+        print(f'  Wrote {fname} ({len(times)} time steps)')
+    return tpar_files
+
+# === Usage for Sunda Strait ===
+# Western boundary points (S to N along 104.5°E)
+west_pts = [(104.5, lat) for lat in np.arange(-7.5, -5.4, 0.5)]
+# Southern boundary points (W to E along 7.5°S)
+south_pts = [(lon, -7.5) for lon in np.arange(104.5, 106.6, 0.5)]
+
+era5_to_tpar('era5_waves_202409.nc', west_pts, './tpar_west')
+era5_to_tpar('era5_waves_202409.nc', south_pts, './tpar_south')
+```
+
+> **Direction convention:** ERA5 uses meteorological convention (direction waves come FROM, clockwise from N) — same as SWAN's `NAUTICAL`. No conversion needed.
+
+### COAWST MATLAB Tools for WW3 Boundaries
+
+COAWST includes tools in `Tools/mfiles/` for creating SWAN boundaries from WAVEWATCH III:
+
+| Script | Purpose |
+|---|---|
+| `create_swanTpar_from_WW3.m` | WW3 bulk parameters → SWAN TPAR files |
+| `create_swan_2dspec_from_ww3.m` | WW3 2D spectra → SWAN `.sp2` files |
+
+**Unit conversion for WW3 spectra:** WW3 outputs spectral density in m²/Hz/rad. SWAN expects m²/Hz/deg. Multiply by π/180.
+
+**Direction conversion for WW3:** WW3 typically uses "going to" convention. SWAN uses "coming from". Add 180° to WW3 directions.
+
+### SWAN-to-SWAN Nesting (NESTout / BOUNDNEST)
+
+For one-way nesting from a coarse SWAN run to a fine run:
+
+**Coarse run** — output nested boundary spectra:
+
+```
+NGRID 'fine' 104.5 -7.5 0.0 2.0 2.0 200 200
+NESTOUT 'fine' 'nest_spectra.sp2' OUTPUT 20240901.000000 1 HR
+```
+
+**Fine run** — read nested boundary spectra:
+
+```
+BOUNDNEST1 NEST 'nest_spectra.sp2' CLOSED
+```
+
+| Command | Purpose |
+|---|---|
+| `BOUNDNEST1` | Nesting from SWAN (reads SWAN `.sp2` format) |
+| `BOUNDNEST2` | Nesting from WAM |
+| `BOUNDNEST3` | Nesting from WAVEWATCH III |
+| `CLOSED` | Apply boundary on all 4 sides |
+| `OPEN` | Leave shoreward side open |
+
+---
+
+## 20. Nesting in COAWST
+
+COAWST supports multiple grids for each component model. This enables higher resolution in areas of interest while keeping the outer domain coarser.
+
+### Multiple SWAN Grids
+
+The most common nesting in COAWST. Each SWAN grid runs as a separate instance.
+
+#### Configuration
+
+In `coupling.in`, list multiple SWAN input files:
+
+```
+NnodesWAV = 4              ! total SWAN processors (split among grids)
+
+WAV_name = Projects/Sunda/swan_parent.in \
+           Projects/Sunda/swan_child.in
+```
+
+In `scrip_coawst.in`, specify multiple SWAN grids:
+
+```
+SWAN_GRIDS = 2
+
+SWAN_COORD1 = 'swan_parent_coord.grd'
+SWAN_BATH1  = 'swan_parent_bathy.bot'
+SWAN_NUMX1  = 201
+SWAN_NUMY1  = 171
+CARTESIAN1  = 0
+
+SWAN_COORD2 = 'swan_child_coord.grd'
+SWAN_BATH2  = 'swan_child_bathy.bot'
+SWAN_NUMX2  = 301
+SWAN_NUMY2  = 251
+CARTESIAN2  = 0
+```
+
+SCRIP generates interpolation weights for all grid pairs automatically.
+
+#### How It Works
+
+- The parent SWAN grid couples with WRF/ROMS at the specified interval
+- The child SWAN grid also couples with ROMS
+- SWAN grids can have different resolutions; the child is typically finer
+- Each SWAN grid receives wind from WRF and currents/water levels from ROMS
+- Each SWAN grid sends wave fields back to ROMS
+
+### Multiple ROMS Grids (Nesting)
+
+ROMS supports two nesting modes:
+
+| Mode | CPP Flag | Description |
+|---|---|---|
+| **Refinement** | `NESTING` | Parent and child share the same domain region; child has finer resolution. Two-way feedback optional. |
+| **Composition** | `NESTING` + `COMPOSED` | Child covers a different region (e.g., adjacent domains). |
+
+#### Configuration for Nested ROMS in COAWST
+
+In the header file:
+
+```c
+#define NESTING           /* enable nesting */
+/* #define COMPOSED */    /* for composition mode */
+```
+
+In `ocean.in`, define multiple grids:
+
+```
+! Parent grid: Lm=150, Mm=120, N=30
+! Child grid:  Lm=200, Mm=160, N=30 (finer resolution)
+Ngrids = 2
+
+NtileI == 4  2             ! I-tiles for each grid
+NtileJ == 4  2             ! J-tiles for each grid
+```
+
+In `coupling.in`:
+
+```
+NnodesOCN = 20             ! total ROMS processors
+                           ! parent: NtileI(1)*NtileJ(1) = 16
+                           ! child:  NtileI(2)*NtileJ(2) = 4
+```
+
+#### Which Grid Couples to SWAN/WRF?
+
+By default, all ROMS grids exchange data with SWAN and WRF. The SCRIP weight file must contain weights for each ROMS grid paired with each SWAN/WRF grid.
+
+### WRF Nested Domains
+
+WRF nesting is handled internally by WRF (not by MCT). The coupling to ROMS/SWAN typically uses the **finest WRF domain** that overlaps with the ocean/wave grids.
+
+In `namelist.input`:
+
+```
+&domains
+ max_dom     = 2,
+ dx          = 9000, 3000,
+ dy          = 9000, 3000,
+ parent_id   = 1, 1,
+ i_parent_start = 1, 40,
+ j_parent_start = 1, 30,
+ parent_grid_ratio = 1, 3,
+/
+```
+
+The SCRIP weight file must match the WRF domain that couples to ROMS/SWAN. In `scrip_coawst.in`:
+
+```
+WRF_GRIDS = 1
+WRF_GRIDS1 = 'wrfinput_d02'     ! couple using the fine domain
+```
+
+### Processor Allocation with Nesting
+
+The total `mpirun -np N` must equal the sum of all model processors:
+
+```
+NnodesATM = 64    ! WRF (handles all WRF domains internally)
+NnodesWAV = 8     ! SWAN (split among SWAN grids)
+NnodesOCN = 48    ! ROMS (split among ROMS grids via NtileI/NtileJ)
+NnodesHYD = 0
+
+! Total: 64 + 8 + 48 = 120
+! mpirun -np 120 ./coawstM coupling.in
+```
+
+**Processor split for nested ROMS:**
+- ROMS distributes processors among grids based on `NtileI × NtileJ` per grid
+- The sum across all grids must equal `NnodesOCN`
+
+**Processor split for multiple SWAN grids:**
+- SWAN distributes `NnodesWAV` processors among grids proportionally
+- Cannot control per-grid allocation directly in `coupling.in`
+
+### Example: Sunda Strait with Nesting
+
+A practical nested setup:
+
+```
+WRF:  d01 (9 km) + d02 (3 km) — WRF handles nesting internally
+ROMS: parent (3 km, wider Indonesian waters) + child (1 km, Sunda Strait)
+SWAN: parent (3 km, matching ROMS parent) + child (1 km, matching ROMS child)
+
+Processor allocation:
+  NnodesATM = 64
+  NnodesWAV = 8     (4 per SWAN grid)
+  NnodesOCN = 48    (36 parent + 12 child)
+  Total: 120
+
+Coupling: WRF d02 ↔ both ROMS grids ↔ both SWAN grids
+```
+
+### Tips for Nesting
+
+- **Start simple**: Get the unnested single-grid case working first, then add nesting.
+- **Grid alignment**: The child grid boundaries should align with parent grid cells for clean interpolation.
+- **Time step**: The child grid may need a smaller time step than the parent. Set `DT` per grid in `ocean.in`.
+- **Coupling interval**: Use the same coupling interval for all grids, or match each to its time step.
+- **SCRIP weights**: Must include all grid pairs. The weight file grows with the number of grids.
+- **Debugging**: Test each model's nesting independently (ROMS-only, SWAN-only) before coupling.
 
 ---
 
