@@ -16,6 +16,14 @@
 7. [Running COAWST](#7-running-coawst)
 8. [Sunda Strait Application: Building Your Own Ina-CAWO](#8-sunda-strait-application-building-your-own-ina-cawo)
 9. [Troubleshooting & Tips](#9-troubleshooting--tips)
+10. [SWAN Grid Pre-Processing](#10-swan-grid-pre-processing)
+11. [Output Files & Post-Processing](#11-output-files--post-processing)
+12. [Verifying Coupling Works](#12-verifying-coupling-works)
+13. [Spin-Up Strategies](#13-spin-up-strategies)
+14. [Restart & Cycling](#14-restart--cycling)
+15. [Sediment Transport (CSTMS)](#15-sediment-transport-cstms)
+16. [Data Download Sources](#16-data-download-sources)
+17. [Project Directory Organization](#17-project-directory-organization)
 
 ---
 
@@ -731,6 +739,874 @@ Generate interpolation weights between WRF d02, ROMS, and SWAN grids.
 
 ---
 
+## 10. SWAN Grid Pre-Processing
+
+### Grid File Formats
+
+SWAN needs two files for bottom grid input: a **coordinate file** (`.grd`) and a **bathymetry file** (`.bot`).
+
+#### Coordinate File (`.grd`)
+
+For curvilinear or unstructured grids, contains x/y (or lon/lat) values. Two blocks: all x-coordinates, then all y-coordinates. Space-separated, row-major order.
+
+```
+$ swan_coord.grd
+$ x-coordinates (NUMX+1 values per row, NUMY+1 rows)
+105.0000  105.0100  105.0200  105.0300  ...
+105.0000  105.0100  105.0200  105.0300  ...
+...
+$ y-coordinates (same layout)
+-7.0000  -7.0000  -7.0000  -7.0000  ...
+-6.9900  -6.9900  -6.9900  -6.9900  ...
+...
+```
+
+For **regular grids** (`CGRID REGular`), no coordinate file is needed — the grid is defined entirely by the `CGRID` command parameters (origin, length, resolution).
+
+#### Bathymetry File (`.bot`)
+
+Plain ASCII, space-separated depth values in meters (positive down). Row-major: first row is the southernmost (lowest y), values go west to east (increasing x).
+
+```
+$ swan_bathy.bot
+  80.2  79.5  78.1  76.3  74.0  ...
+  82.1  81.3  80.0  78.5  76.2  ...
+  ...
+```
+
+Dimensions must match `NUMX+1` columns × `NUMY+1` rows (matching the `INPGRID BOTTOM` command).
+
+### Creating SWAN Grids with Python
+
+#### Regular Grid from GEBCO
+
+```python
+import numpy as np
+import xarray as xr
+
+# Define SWAN domain
+lon_min, lon_max = 104.5, 106.5
+lat_min, lat_max = -7.5, -5.5
+dx, dy = 0.01, 0.01  # ~1 km resolution
+
+# Create grid coordinates
+lons = np.arange(lon_min, lon_max + dx, dx)
+lats = np.arange(lat_min, lat_max + dy, dy)
+numx = len(lons) - 1
+numy = len(lats) - 1
+
+# Load GEBCO bathymetry and interpolate onto SWAN grid
+gebco = xr.open_dataset('GEBCO_2024.nc')
+gebco_sub = gebco['elevation'].sel(
+    lon=slice(lon_min - 0.1, lon_max + 0.1),
+    lat=slice(lat_min - 0.1, lat_max + 0.1)
+)
+
+# Interpolate to SWAN grid points
+from scipy.interpolate import RegularGridInterpolator
+interp = RegularGridInterpolator(
+    (gebco_sub.lat.values, gebco_sub.lon.values),
+    gebco_sub.values, method='linear'
+)
+lon_grid, lat_grid = np.meshgrid(lons, lats)
+points = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
+depth_swan = -interp(points).reshape(lat_grid.shape)  # positive down
+
+# Set minimum depth (important for stability)
+depth_swan = np.maximum(depth_swan, 5.0)
+
+# Mask land as negative (SWAN convention: negative = land)
+depth_swan[depth_swan <= 0] = -99.0
+
+# Write bathymetry file
+np.savetxt('swan_bathy.bot', depth_swan, fmt='%10.2f')
+
+print(f"SWAN grid: NUMX={numx}, NUMY={numy}")
+print(f"Origin: ({lon_min}, {lat_min})")
+print(f"Length: ({lon_max - lon_min}, {lat_max - lat_min})")
+```
+
+The corresponding SWAN input commands:
+
+```
+CGRID REGular 104.5 -7.5 0.0 2.0 2.0 200 200 &
+      CIRCLE 36 0.03 1.0 30
+
+INPGRID BOTTOM REGular 104.5 -7.5 0.0 200 200 0.01 0.01
+READINP BOTTOM 1.0 'swan_bathy.bot' 3 0 FREE
+```
+
+#### Curvilinear Grid (Matching ROMS)
+
+When ROMS uses a curvilinear grid, it helps to use the same grid for SWAN:
+
+```python
+import netCDF4 as nc
+
+# Read ROMS grid
+roms = nc.Dataset('roms_grid.nc')
+lon_rho = roms.variables['lon_rho'][:]
+lat_rho = roms.variables['lat_rho'][:]
+h = roms.variables['h'][:]
+
+numy, numx = lon_rho.shape
+numx -= 1
+numy -= 1
+
+# Write coordinate file (x-coords then y-coords)
+with open('swan_coord.grd', 'w') as f:
+    # Longitude block
+    for j in range(lon_rho.shape[0]):
+        line = '  '.join(f'{v:.6f}' for v in lon_rho[j, :])
+        f.write(line + '\n')
+    # Latitude block
+    for j in range(lat_rho.shape[0]):
+        line = '  '.join(f'{v:.6f}' for v in lat_rho[j, :])
+        f.write(line + '\n')
+
+# Write bathymetry (from ROMS h, already positive down)
+depth = np.maximum(h, 5.0)
+np.savetxt('swan_bathy.bot', depth, fmt='%10.2f')
+
+print(f"Curvilinear grid: NUMX={numx}, NUMY={numy}")
+```
+
+The SWAN input for a curvilinear grid:
+
+```
+CGRID CURVilinear 200 200 EXC -99.0 &
+      CIRCLE 36 0.03 1.0 30
+READGRID COORDINATES 1.0 'swan_coord.grd' 3 0 FREE
+
+INPGRID BOTTOM CURVilinear 0 0 200 200 EXC -99.0
+READINP BOTTOM 1.0 'swan_bathy.bot' 3 0 FREE
+```
+
+### COAWST MATLAB Tools
+
+COAWST includes MATLAB scripts in `Tools/mfiles/swan_forc/`:
+
+| Script | Purpose |
+|---|---|
+| `create_swan_coord.m` | Create SWAN coordinate file from ROMS grid |
+| `create_swan_bathy.m` | Create SWAN bathymetry file from ROMS grid |
+| `swan_write_input.m` | Generate SWAN input file template |
+
+```matlab
+% MATLAB example (COAWST tools)
+roms_grid = 'roms_grid.nc';
+swan_coord_file = 'swan_coord.grd';
+swan_bathy_file = 'swan_bathy.bot';
+
+% Extract from ROMS grid
+create_swan_coord(roms_grid, swan_coord_file);
+create_swan_bathy(roms_grid, swan_bathy_file);
+```
+
+### Grid Alignment Tips
+
+- **Same domain as ROMS**: Easiest approach — use the same grid points. SCRIP weights become trivial (identity mapping).
+- **Slightly larger than ROMS**: SWAN domain can extend beyond ROMS to avoid wave energy losses at boundaries.
+- **Different resolution**: SWAN and ROMS grids can have different resolutions. SCRIP handles the interpolation. SWAN often uses coarser resolution than ROMS since wave physics doesn't require the same resolution as tidal/current dynamics.
+- **Spectral resolution**: 36 directional bins and 30 frequency bins (0.03–1.0 Hz) is standard. Increase directional bins for narrow straits where wave direction matters.
+
+---
+
+## 11. Output Files & Post-Processing
+
+### Output Files by Component
+
+#### ROMS Output
+
+| File | Config Parameter | Description |
+|---|---|---|
+| `ocean_his.nc` | `NHIS` | Snapshots at specified intervals. Full 3D fields. |
+| `ocean_avg.nc` | `NAVG` | Time-averaged fields. Removes tidal signals. |
+| `ocean_rst.nc` | `NRST` | Restart file. Ping-pong (2 records). |
+| `ocean_dia.nc` | `NDIA` | Momentum/tracer equation term diagnostics. Requires `DIAGNOSTICS_UV`/`DIAGNOSTICS_TS`. |
+| `ocean_sta.nc` | `NSTA` | Time series at specified station locations. |
+| `ocean_flt.nc` | — | Lagrangian float trajectories. Requires `FLOATS`. |
+
+Key ROMS coupled variables in `ocean_his.nc`:
+
+| Variable | Description | Indicates Coupling With |
+|---|---|---|
+| `Hwave` | Significant wave height | SWAN → ROMS |
+| `Dwave` | Mean wave direction | SWAN → ROMS |
+| `Lwave` | Mean wavelength | SWAN → ROMS |
+| `Pwave_bot` | Bottom wave period | SWAN → ROMS |
+| `sustr`, `svstr` | Surface wind stress | WRF → ROMS (if `ATM2OCN_FLUXES`) |
+| `shflux` | Net surface heat flux | WRF → ROMS |
+
+#### WRF Output
+
+| File | Config Parameter | Description |
+|---|---|---|
+| `wrfout_d0X_*` | `history_interval` (min) | Main output. All atmospheric variables. |
+| `wrfrst_d0X_*` | `restart_interval` (min) | Restart file. |
+
+Key WRF coupled variable: `SST` (should change over time if ROMS → WRF coupling active).
+
+#### SWAN Output
+
+| File | Format | Description |
+|---|---|---|
+| `swan_*_his.nc` | NetCDF | Wave field snapshots (Hsig, Dir, TPS, etc.) |
+| `swan_rst.dat` | ASCII | Hotstart/restart (2D spectral energy at all grid points) |
+
+### Python Post-Processing
+
+```bash
+pip install xarray netCDF4 matplotlib cartopy cmocean dask
+```
+
+#### Surface Temperature Map
+
+```python
+import xarray as xr
+import matplotlib.pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import cmocean
+
+ds = xr.open_dataset('ocean_his.nc')
+sst = ds['temp'].isel(ocean_time=-1, s_rho=-1)
+
+fig, ax = plt.subplots(subplot_kw={'projection': ccrs.PlateCarree()},
+                        figsize=(12, 8))
+ax.add_feature(cfeature.LAND, facecolor='lightgray')
+ax.add_feature(cfeature.COASTLINE)
+pc = ax.pcolormesh(ds['lon_rho'], ds['lat_rho'], sst,
+                    transform=ccrs.PlateCarree(),
+                    cmap=cmocean.cm.thermal, shading='auto')
+plt.colorbar(pc, ax=ax, label='Temperature (°C)')
+ax.set_title('ROMS Sea Surface Temperature')
+ax.gridlines(draw_labels=True)
+plt.savefig('sst_map.png', dpi=150, bbox_inches='tight')
+```
+
+#### Vertical Section
+
+```python
+import numpy as np
+
+ds = xr.open_dataset('ocean_his.nc')
+eta_idx = 50  # cross-section index
+
+temp = ds['temp'].isel(ocean_time=-1, eta_rho=eta_idx)
+h = ds['h'].isel(eta_rho=eta_idx)
+zeta = ds['zeta'].isel(ocean_time=-1, eta_rho=eta_idx)
+Cs_r = ds['Cs_r']
+hc = float(ds['hc'])
+
+# Compute depth (Vtransform=2)
+S = (hc * Cs_r + h * Cs_r) / (hc + h)
+z = zeta + (zeta + h) * S
+
+lon = ds['lon_rho'].isel(eta_rho=eta_idx)
+
+fig, ax = plt.subplots(figsize=(14, 6))
+pc = ax.pcolormesh(
+    lon.values[np.newaxis, :] * np.ones_like(z.values),
+    z.values, temp.values,
+    cmap=cmocean.cm.thermal, shading='auto')
+plt.colorbar(pc, ax=ax, label='Temperature (°C)')
+ax.set_xlabel('Longitude')
+ax.set_ylabel('Depth (m)')
+ax.set_title('Vertical Temperature Section')
+plt.savefig('vertical_section.png', dpi=150, bbox_inches='tight')
+```
+
+#### Compare Coupled Fields
+
+```python
+import numpy as np
+
+# WRF wind speed
+wrf = xr.open_dataset('wrfout_d01_2024-09-01_00:00:00')
+wspd = np.sqrt(wrf['U10']**2 + wrf['V10']**2).isel(Time=-1)
+
+# ROMS wave height (from SWAN coupling)
+roms = xr.open_dataset('ocean_his.nc')
+hwave = roms['Hwave'].isel(ocean_time=-1)
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+wspd.plot(ax=axes[0], cmap='viridis')
+axes[0].set_title('WRF 10m Wind Speed (m/s)')
+hwave.plot(ax=axes[1], cmap=cmocean.cm.amp)
+axes[1].set_title('ROMS Wave Height from SWAN (m)')
+plt.tight_layout()
+plt.savefig('coupled_fields.png', dpi=150)
+```
+
+---
+
+## 12. Verifying Coupling Works
+
+After your first coupled run, **always verify** that models are actually exchanging data. A run that completes without errors does not guarantee coupling is active.
+
+### Step 1: Check Log Output
+
+COAWST prints MCT initialization messages at startup. Look for:
+- `"MCT: Initialize coupler..."` for each model pair
+- Periodic exchange messages at your specified `TI_*` interval
+- No warnings about zero-valued fields or failed interpolation
+
+### Step 2: SST Exchange (WRF ↔ ROMS)
+
+The easiest coupling check. If ROMS sends SST to WRF, the `SST` field in `wrfout` should **change over time** and match the ROMS surface temperature.
+
+```python
+import xarray as xr
+
+wrf = xr.open_dataset('wrfout_d01_2024-09-01_00:00:00')
+sst_wrf = wrf['SST']
+
+# If SST is constant in time → coupling NOT working
+print("SST std over time:", float(sst_wrf.std('Time')))
+# Should be > 0 for active coupling
+
+roms = xr.open_dataset('ocean_his.nc')
+sst_roms = roms['temp'].isel(s_rho=-1)
+print("ROMS SST range:", float(sst_roms.min()), "to", float(sst_roms.max()))
+```
+
+### Step 3: Wave Fields in ROMS (SWAN → ROMS)
+
+If coupling works, ROMS `ocean_his.nc` should contain wave variables with non-zero, physically reasonable values.
+
+```python
+roms = xr.open_dataset('ocean_his.nc')
+
+for var in ['Hwave', 'Dwave', 'Lwave', 'Pwave_bot']:
+    if var in roms:
+        print(f"{var}: min={float(roms[var].min()):.3f}, "
+              f"max={float(roms[var].max()):.3f}")
+    else:
+        print(f"WARNING: {var} not found — SWAN→ROMS coupling inactive")
+```
+
+Expected values:
+- `Hwave`: 0.1–5 m (coastal), should vary spatially
+- `Lwave`: 10–300 m
+- `Pwave_bot`: 3–15 s
+
+### Step 4: Coupling Interval Consistency
+
+The coupling interval must divide evenly into each model's time step:
+
+```
+TI_ATM2OCN = 600 s, WRF dt = 20 s  → 600/20 = 30 ✓
+TI_WAV2OCN = 600 s, ROMS dt = 60 s → 600/60 = 10 ✓
+TI_WAV2OCN = 600 s, SWAN dt = 3 s  → 600/3 = 200 ✓
+```
+
+If the division is not exact, coupling exchanges will be skipped or misaligned.
+
+### Step 5: Coastal Masking
+
+A known issue: WRF can send zero-valued forcing at coastal strips due to land/sea mask mismatch. Check wind stress near coastlines in ROMS output for suspicious zero bands.
+
+### Quick Checklist
+
+| Check | How | Pass Criteria |
+|---|---|---|
+| SST varies in `wrfout` | Plot SST at multiple times | SST changes between timesteps |
+| `Hwave` exists in ROMS | `ncdump -h ocean_his.nc` | Variable present and non-zero |
+| Wind stress non-zero | Plot `sustr`/`svstr` | No zero bands at coast |
+| Log shows exchanges | `grep "MCT" coawst.log` | Exchange messages at `TI_*` intervals |
+| Energy conservation | Compare domain-total KE over time | No sudden jumps at exchange times |
+
+---
+
+## 13. Spin-Up Strategies
+
+### How Long to Spin Up
+
+| Component | Typical Spin-Up | Monitor |
+|---|---|---|
+| **ROMS (barotropic/tidal)** | 1–7 days | Sea surface height, tidal amplitudes reaching equilibrium |
+| **ROMS (baroclinic)** | Weeks to months | Domain-averaged kinetic energy, temperature/salinity drift |
+| **WRF** | 6–12 hours | Precipitation patterns, boundary layer development |
+| **SWAN** | Hours to ~1 day | Wave energy reaching steady state (depends on fetch) |
+
+**Key diagnostic:** Monitor domain-averaged **kinetic energy** over time. When KE stabilizes (oscillates around a quasi-steady value), spin-up is complete.
+
+### Cold Start vs Warm Start
+
+| | Cold Start | Warm Start |
+|---|---|---|
+| **ROMS** | Initialize from GLORYS12V1 or climatology | Use restart file from previous run |
+| **WRF** | Initialize from GFS/ERA5 analysis | Use `wrfrst_d0X_*` restart file |
+| **SWAN** | Flat sea (no wave energy) | Hotstart file (`swan_rst.dat`) |
+| **Pro** | Simple, no prior runs needed | Short spin-up, immediate realism |
+| **Con** | Long spin-up, first days unrealistic | Requires managing restart files |
+
+### Recommended Approach: Sequential Spin-Up
+
+For first-time users, spin up components separately before coupling:
+
+```
+Phase 1 (days -14 to -7):  Run ROMS uncoupled → develop ocean circulation
+Phase 2 (days -7 to -1):   Run SWAN standalone → develop wave field
+Phase 3 (day 0 onward):    Start coupled COAWST using ROMS restart +
+                            SWAN hotstart as initial conditions
+```
+
+This avoids the shock of sudden coupling feedback during adjustment.
+
+### Alternative: Simultaneous Start with Ramp
+
+Start all models together but enable `RAMP_TIDES` to gradually introduce tidal forcing:
+
+```c
+#define RAMP_TIDES    /* ramp tides from zero over ~1 day */
+```
+
+Allow at least 1–2 days after the ramp completes before using the output as "production" data.
+
+---
+
+## 14. Restart & Cycling
+
+### Restart Files by Component
+
+| Component | Restart File | Config Parameter |
+|---|---|---|
+| ROMS | `ocean_rst.nc` | `NRST` (timesteps between writes) |
+| WRF | `wrfrst_d0X_YYYY-MM-DD_HH:MM:SS` | `restart_interval` (minutes) |
+| SWAN | `swan_rst.dat` | `RESTART` command in SWAN input |
+
+**Critical:** Set all three restart intervals to the **same wall-clock time** so you have a consistent set of restart files.
+
+### ROMS Restart Configuration
+
+In `ocean.in`:
+
+```
+! Write restart every 6 hours (if DT=2.5s: 6*3600/2.5 = 8640)
+NRST == 8640
+
+! Cold start:
+NRREC == 0
+ININAME == ocean_ini.nc
+
+! For restart:
+! NRREC == -1              ! read last record automatically
+! ININAME == ocean_rst.nc  ! use restart file as initial condition
+
+! Create new output files on restart (T) or append (F)
+LDEFOUT == T
+```
+
+### WRF Restart Configuration
+
+In `namelist.input`:
+
+```
+&time_control
+ restart                  = .false.      ! .true. for restart
+ restart_interval         = 360          ! minutes between restart writes
+ override_restart_timers  = .true.       ! recommended for coupled restarts
+/
+```
+
+### SWAN Restart Configuration
+
+In the SWAN input file:
+
+```
+$ Cold start (omit INIT HOTSTART):
+INIT DEFAULT
+
+$ Write restart every 6 hours:
+RESTART 'swan_rst.dat' FREE 6 HR
+
+$ For warm start (add INIT HOTSTART):
+$ INIT HOTSTART 'swan_rst.dat'
+```
+
+### Coupled Restart Procedure
+
+1. **Verify all restart files exist at the same time:**
+   - `ocean_rst.nc`
+   - `wrfrst_d01_YYYY-MM-DD_HH:MM:SS`
+   - `swan_rst.dat`
+
+2. **Modify configuration files:**
+
+   ROMS (`ocean.in`):
+   ```
+   NRREC == -1
+   ININAME == ocean_rst.nc
+   LDEFOUT == T
+   ```
+
+   WRF (`namelist.input`):
+   ```
+   restart = .true.
+   ```
+
+   SWAN input:
+   ```
+   INIT HOTSTART 'swan_rst.dat'
+   ```
+
+3. **Run as normal:**
+   ```bash
+   mpirun -np 120 ./coawstM coupling_sunda.in > coawst_restart.log
+   ```
+
+### Operational Cycling (Daily Forecast)
+
+```
+Day 1 (initialization):
+  1. Run ROMS uncoupled for 7–14 days spin-up
+  2. Run SWAN standalone to develop wave field
+
+Day 2+ (daily cycle):
+  1. Download latest GFS atmospheric forcing
+  2. Download latest ocean BC (GLORYS near-real-time, if available)
+  3. Use previous cycle's restart files:
+     ROMS:  NRREC=-1, ININAME=ocean_rst.nc
+     WRF:   restart=.true.
+     SWAN:  INIT HOTSTART 'swan_rst.dat'
+  4. Run coupled COAWST for 24–48 hours
+  5. Save restart files; archive output
+  6. Repeat next day
+```
+
+---
+
+## 15. Sediment Transport (CSTMS)
+
+COAWST integrates the **Community Sediment Transport Modeling System (CSTMS)** into ROMS for suspended load, bedload, and morphodynamic evolution.
+
+### Enabling Sediment Transport
+
+Minimum CPP flags in your application header:
+
+```c
+/* Core sediment */
+#define SEDIMENT              /* master switch */
+#define SUSPLOAD              /* suspended load transport */
+
+/* Bottom boundary layer (choose one) */
+#define SSW_BBL               /* Sherwood-Signell-Warner (recommended with waves) */
+/* #define MB_BBL */          /* Meinte Blaas */
+/* #define SG_BBL */          /* Styles-Glenn */
+
+/* Bedload transport (choose one or more) */
+#define BEDLOAD_SOULSBY       /* waves + currents (continental shelf) */
+/* #define BEDLOAD_MPM */     /* currents only (rivers, estuaries) */
+/* #define BEDLOAD_VANDERA */ /* nearshore, wave nonlinearity */
+
+/* Morphodynamics */
+#define SED_MORPH             /* allow bed elevation to evolve */
+
+/* Optional */
+#define SED_DENS              /* sediment effects on seawater density */
+#define ANA_SEDIMENT          /* analytical initial sediment fields */
+```
+
+### CPP Flag Reference
+
+| Flag | Description |
+|---|---|
+| `SEDIMENT` | Master switch |
+| `SUSPLOAD` | Suspended load transport |
+| `BEDLOAD_MPM` | Meyer-Peter-Mueller bedload (currents only) |
+| `BEDLOAD_SOULSBY` | Soulsby-Damgaard bedload (waves + currents) |
+| `BEDLOAD_VANDERA` | van der A bedload (nearshore, wave asymmetry) |
+| `SED_MORPH` | Bed elevation evolves with erosion/deposition |
+| `SED_DENS` | Sediment affects seawater density |
+| `SED_BIODIFF` | Biodiffusion of sediment in bed |
+| `SSW_BBL` | Bottom boundary layer with wave-current interaction |
+| `MB_BBL` | Meinte Blaas BBL |
+| `SG_BBL` | Styles-Glenn BBL |
+
+### The `sediment.in` Configuration File
+
+#### Sediment Class Properties
+
+Number of sediment classes is set at compile time: `NCS` (cohesive/mud) + `NNS` (non-cohesive/sand) = `NST` (total).
+
+**Mud (cohesive) parameters:**
+
+```
+MUD_SD50   == 0.015d0      ! Median grain diameter (mm) — 15 µm
+MUD_SRHO   == 2650.0d0     ! Grain density (kg/m³) — quartz
+MUD_CSED   == 0.0d0        ! Initial concentration in water (kg/m³)
+MUD_WSED   == 0.1d0        ! Settling velocity (mm/s)
+MUD_TAU_CE == 0.05d0       ! Critical shear stress for erosion (N/m²)
+MUD_TAU_CD == 0.05d0       ! Critical shear stress for deposition (N/m²)
+MUD_ERATE  == 5.0d-4       ! Surface erosion rate (kg/m²/s)
+MUD_BFRAC  == 0.5d0        ! Bed fraction (0–1)
+```
+
+**Sand (non-cohesive) parameters:**
+
+```
+SAND_SD50   == 0.25d0      ! Median grain diameter (mm) — fine sand
+SAND_SRHO   == 2650.0d0    ! Grain density (kg/m³)
+SAND_CSED   == 0.0d0       ! Initial concentration in water (kg/m³)
+SAND_WSED   == 36.0d0      ! Settling velocity (mm/s)
+SAND_TAU_CE == 0.16d0      ! Critical shear stress for erosion (N/m²)
+SAND_TAU_CD == 0.16d0      ! Critical shear stress for deposition (N/m²)
+SAND_ERATE  == 5.0d-4      ! Surface erosion rate (kg/m²/s)
+SAND_BFRAC  == 0.5d0       ! Bed fraction (0–1)
+```
+
+#### Bed Layer Parameters
+
+```
+Nbed == 3                  ! Number of bed layers
+
+! Initial thickness of each layer (m): active, sub-surface, deep
+BTHK == 0.01d0  0.10d0  1.00d0
+
+! Porosity of each layer
+BPOR == 0.5d0  0.5d0  0.5d0
+
+! New layer forms when deposition exceeds this thickness (m)
+NEWLAYER_THICK == 0.001d0
+
+! Bedload active layer thickness factor
+BEDLOAD_COEFF == 0.05d0
+```
+
+### Settling Velocity Reference
+
+| Sediment Type | Grain Size (mm) | Settling Velocity (mm/s) |
+|---|---|---|
+| Fine clay | 0.001–0.004 | 0.001–0.01 |
+| Silt | 0.004–0.063 | 0.01–1.0 |
+| Very fine sand | 0.063–0.125 | 1–10 |
+| Fine sand | 0.125–0.25 | 10–25 |
+| Medium sand | 0.25–0.50 | 25–60 |
+| Coarse sand | 0.50–2.0 | 60–200 |
+
+### Bedload Formulations
+
+| Method | Best For | Accounts for Waves? |
+|---|---|---|
+| `BEDLOAD_MPM` | Rivers, estuaries, tidal channels | No |
+| `BEDLOAD_SOULSBY` | Continental shelf, moderate wave influence | Yes |
+| `BEDLOAD_VANDERA` | Surf zone, nearshore bars, wave-dominated | Yes (including wave asymmetry) |
+
+### Wave-Sediment Coupling Feedback
+
+When SWAN is coupled to ROMS with sediment enabled, a powerful feedback loop occurs:
+
+```
+SWAN provides wave orbital velocity → ROMS BBL computes enhanced bed stress →
+Sediment is resuspended/transported → Bed elevation changes (SED_MORPH) →
+Updated bathymetry sent back to SWAN → Wave refraction/shoaling changes →
+Modified wave field affects stress → ...
+```
+
+Key fields from SWAN that drive sediment processes:
+- `Hwave` — controls orbital velocities
+- `Pwave_bot` — determines orbital velocity magnitude
+- `Dwave` — determines wave-driven transport direction
+
+Required CPP flags for wave-sediment interaction:
+
+```c
+#define SEDIMENT
+#define SUSPLOAD
+#define BEDLOAD_SOULSBY       /* or BEDLOAD_VANDERA */
+#define SED_MORPH             /* if you want bed evolution */
+#define SSW_BBL               /* wave-current BBL */
+#define WEC_VF                /* vortex force */
+#define WDISS_WAVEMOD
+```
+
+---
+
+## 16. Data Download Sources
+
+### Atmospheric Forcing (for WRF)
+
+#### GFS (Global Forecast System)
+
+| Resource | URL |
+|---|---|
+| NOMADS main page | https://nomads.ncep.noaa.gov/ |
+| GFS 0.25° GRIB filter | https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl |
+| GFS products | https://www.nco.ncep.noaa.gov/pmb/products/gfs/ |
+
+```bash
+# Download GFS 0.25° (example for a single forecast hour)
+wget "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs.20240901/00/atmos/gfs.t00z.pgrb2.0p25.f012"
+```
+
+#### ERA5 Reanalysis
+
+| Resource | URL |
+|---|---|
+| CDS portal | https://cds.climate.copernicus.eu/ |
+| ERA5 single levels | https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels |
+| ERA5 pressure levels | https://cds.climate.copernicus.eu/datasets/reanalysis-era5-pressure-levels |
+| CDS API setup | https://cds.climate.copernicus.eu/how-to-api |
+
+```bash
+pip install cdsapi
+# Create ~/.cdsapirc with your API key from the CDS portal
+```
+
+### Ocean IC/BC (for ROMS)
+
+#### GLORYS12V1 (Copernicus Marine)
+
+| Resource | URL |
+|---|---|
+| Product page | https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030 |
+| Copernicus Marine Toolbox | https://pypi.org/project/copernicusmarine/ |
+
+Resolution: 1/12° (~8 km), 50 vertical levels, 1993–present.
+
+```bash
+pip install copernicusmarine
+copernicusmarine login
+```
+
+```python
+import copernicusmarine
+
+copernicusmarine.subset(
+    dataset_id="cmems_mod_glo_phy_my_0.083deg_P1D-m",
+    variables=["thetao", "so", "uo", "vo", "zos"],
+    minimum_longitude=104, maximum_longitude=107,
+    minimum_latitude=-8, maximum_latitude=-5,
+    start_datetime="2024-09-01", end_datetime="2024-09-30",
+    output_filename="glorys12v1_sunda.nc",
+)
+```
+
+### Tidal Forcing (for ROMS)
+
+#### TPXO9
+
+| Resource | URL |
+|---|---|
+| TPXO main page | https://www.tpxo.net/ |
+| Registration | https://www.tpxo.net/tpxo-products-and-registration |
+
+Free for academic use. Register to download TPXO9-atlas-v5 NetCDF files. Use `otps2roms` scripts to interpolate tidal constituents onto your ROMS grid.
+
+#### FES2022 (Alternative)
+
+| Resource | URL |
+|---|---|
+| FES2022 release | https://www.aviso.altimetry.fr/en/data/products/auxiliary-products/global-tide-fes/release-fes22.html |
+| PyFES Python package | https://github.com/CNES/aviso-fes |
+
+Resolution: 1/30° (~3.7 km), 34 tidal constituents. Register at AVISO.
+
+### Bathymetry
+
+#### GEBCO
+
+| Resource | URL |
+|---|---|
+| Download page | https://download.gebco.net/ |
+| GEBCO 2025 info | https://www.gebco.net/data-products/gridded-bathymetry-data/ |
+
+Resolution: 15 arc-seconds (~450 m). Download full global NetCDF (~8 GB) or use the interactive tool to subset your region.
+
+### Wave Boundaries (for SWAN)
+
+#### ERA5 Waves
+
+Same CDS portal as atmospheric ERA5. Key variables: `significant_height_of_combined_wind_waves_and_swell`, `mean_wave_direction`, `mean_wave_period`. Resolution: 0.5°.
+
+#### WAVEWATCH III Hindcast
+
+| Resource | URL |
+|---|---|
+| WW3 hindcasts | https://polar.ncep.noaa.gov/waves/hindcasts/nopp-phase2.php |
+| WW3 production data | https://polar.ncep.noaa.gov/waves/hindcasts/prod-multi_1.php |
+
+Extract spectral or bulk wave parameters along your SWAN domain boundaries and convert to SWAN TPAR format (Hs, Tp, Dir, Dspr).
+
+### Quick Reference
+
+| Data | Source | URL |
+|---|---|---|
+| GFS 0.25° | NCEP NOMADS | https://nomads.ncep.noaa.gov/ |
+| ERA5 | Copernicus CDS | https://cds.climate.copernicus.eu/ |
+| GLORYS12V1 | Copernicus Marine | https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030 |
+| TPXO9 tides | Oregon State | https://www.tpxo.net/ |
+| FES2022 tides | AVISO/CNES | https://www.aviso.altimetry.fr/ |
+| GEBCO bathymetry | GEBCO | https://download.gebco.net/ |
+| ERA5 waves | Copernicus CDS | https://cds.climate.copernicus.eu/ |
+| WW3 hindcast | NOAA NCEP | https://polar.ncep.noaa.gov/waves/ |
+
+---
+
+## 17. Project Directory Organization
+
+Recommended directory structure for a COAWST project:
+
+```
+COAWST/                              # COAWST source code (git clone)
+├── Projects/
+│   └── Sunda_Strait/                # Your project directory
+│       ├── sunda_strait.h           # Application header (CPP flags)
+│       ├── coupling_sunda.in        # Coupling configuration
+│       ├── ocean_sunda.in           # ROMS configuration
+│       ├── swan_sunda.in            # SWAN input file
+│       ├── namelist.input           # WRF configuration
+│       ├── sediment_sunda.in        # Sediment configuration (if used)
+│       ├── varinfo.dat              # ROMS variable metadata
+│       ├── stations.in              # ROMS station locations (if used)
+│       │
+│       ├── Grid/                    # Grid files
+│       │   ├── roms_grid.nc         # ROMS grid + bathymetry
+│       │   ├── swan_coord.grd       # SWAN coordinates (curvilinear)
+│       │   ├── swan_bathy.bot       # SWAN bathymetry
+│       │   └── scrip_sunda.nc       # SCRIP interpolation weights
+│       │
+│       ├── Forcing/                 # Forcing data
+│       │   ├── wrfinput_d01         # WRF initial conditions
+│       │   ├── wrfbdy_d01           # WRF boundary conditions
+│       │   ├── wrflowinp_d01        # WRF lower boundary (SST update)
+│       │   ├── ocean_ini.nc         # ROMS initial conditions
+│       │   ├── ocean_bry.nc         # ROMS boundary conditions
+│       │   ├── ocean_frc.nc         # ROMS surface forcing (if BULK_FLUXES)
+│       │   ├── ocean_tides.nc       # ROMS tidal forcing
+│       │   └── swan_boundary.sp2    # SWAN spectral boundary
+│       │
+│       ├── Output/                  # Model output (gitignored)
+│       │   ├── ocean_his.nc
+│       │   ├── ocean_avg.nc
+│       │   ├── ocean_rst.nc
+│       │   ├── wrfout_d01_*
+│       │   ├── wrfrst_d01_*
+│       │   ├── swan_his.nc
+│       │   └── swan_rst.dat
+│       │
+│       └── Scripts/                 # Pre/post-processing scripts
+│           ├── make_roms_grid.py
+│           ├── make_swan_grid.py
+│           ├── make_forcing.py
+│           ├── make_tides.py
+│           ├── make_scrip_weights.sh
+│           ├── run_coawst.sh        # Job submission script
+│           └── plot_results.py
+```
+
+### Tips
+
+- Keep source code (`COAWST/`) separate from output. Never modify source files for project-specific settings — use the header file and `.in` files.
+- Add `Output/` to `.gitignore` — output files are large and regenerable.
+- Use relative paths in `coupling_sunda.in` (relative to the directory where you launch `coawstM`).
+- Store scripts that generate grids and forcing — reproducibility matters.
+- For multiple experiments, create separate subdirectories under `Projects/` (e.g., `Sunda_Strait_tides_only/`, `Sunda_Strait_coupled/`).
+
+---
+
 ## References
 
 ### Foundational Papers
@@ -739,13 +1615,30 @@ Generate interpolation weights between WRF d02, ROMS, and SWAN grids.
 - Kumar, N., Voulgaris, G., Warner, J.C., and Olabarrieta, M. (2012): "Implementation of the vortex force formalism in COAWST." *Ocean Modelling*, 47, 65–95
 - Booij, N., Ris, R.C., and Holthuijsen, L.H. (1999): "A third-generation wave model for coastal regions." *J. Geophys. Res.*, 104(C4), 7649–7666
 
+### Sediment Transport
+
+- Warner, J.C., Sherwood, C.R., Signell, R.P., Harris, C.K., and Arango, H.G. (2008): "Development of a three-dimensional, regional, coupled wave, current, and sediment-transport model." *Computers & Geosciences*, 34(10), 1284–1306
+
 ### Online Resources
 
 - [COAWST GitHub](https://github.com/DOI-USGS/COAWST)
 - [COAWST USGS Page](https://www.usgs.gov/programs/coastal-and-marine-hazards-and-resources-program/science/coupled-ocean-atmosphere-wave)
 - [COAWST Publications (112+ papers)](https://github.com/DOI-USGS/COAWST/wiki/Publications)
+- [COAWST User's Guide (3rd Edition)](https://www.researchgate.net/publication/345813288_COAWST_User's_Guide_-_Third_Edition)
 - [SWAN Official Website](https://swanmodel.sourceforge.io/)
 - [SWAN User Manual (PDF)](https://swanmodel.sourceforge.io/download/zip/swanuse.pdf)
 - [SWAN Technical Documentation (PDF)](https://swanmodel.sourceforge.io/download/zip/swantech.pdf)
+- [WikiROMS Sediment Model](https://www.myroms.org/wiki/Sediment_Model)
+- [WikiROMS sediment.in](https://www.myroms.org/wiki/sediment.in)
 - [Baron Ina-CAWO Whitepaper (PDF)](https://21175713.fs1.hubspotusercontent-na1.net/hubfs/21175713/Brochures%20and%20eBooks/Whitepapers/Baron_BMKG-CAWO%20Whitepaper_06-2024.pdf)
 - [BMKG Ina-CAWO Web Interface](https://web-meteo.bmkg.go.id/id/model-prediksi-cuaca/inacawo)
+
+### Data Sources
+
+- [NCEP NOMADS (GFS)](https://nomads.ncep.noaa.gov/)
+- [Copernicus CDS (ERA5)](https://cds.climate.copernicus.eu/)
+- [Copernicus Marine (GLORYS12V1)](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030)
+- [TPXO Tidal Models](https://www.tpxo.net/)
+- [AVISO FES2022 Tides](https://www.aviso.altimetry.fr/en/data/products/auxiliary-products/global-tide-fes.html)
+- [GEBCO Bathymetry](https://download.gebco.net/)
+- [WAVEWATCH III Hindcasts](https://polar.ncep.noaa.gov/waves/hindcasts/nopp-phase2.php)
