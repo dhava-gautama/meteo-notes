@@ -16,6 +16,8 @@
    - [CSV Station Observations](#33-csv-station-observations)
    - [Matching Forecasts to Observations](#34-matching-forecasts-to-observations)
 4. [Continuous Verification Metrics](#4-continuous-verification-metrics)
+   - [Anomaly Correlation (ACC)](#anomaly-correlation-coefficient-acc)
+   - [Wind Verification](#wind-verification-speed-and-direction)
 5. [Categorical (Dichotomous) Verification Metrics](#5-categorical-dichotomous-verification-metrics)
 6. [Probabilistic Verification Metrics](#6-probabilistic-verification-metrics)
 7. [Spatial Verification](#7-spatial-verification)
@@ -285,6 +287,17 @@ fcst_at_obs = extract_bilinear(
 
 ---
 
+> **Common imports assumed for all code below:**
+> ```python
+> import numpy as np
+> import pandas as pd
+> import xarray as xr
+> import matplotlib.pyplot as plt
+> ```
+> If you're copying a single function, make sure these are imported first.
+
+---
+
 ## 4. Continuous Verification Metrics
 
 > For metric definitions and interpretation, see [Section 6.3 of the verification theory notes](forecast-verification-notes.md#63-methods-for-continuous-forecasts).
@@ -362,38 +375,87 @@ def mse_decomposition(fcst, obs):
     }
 ```
 
+### Anomaly Correlation Coefficient (ACC)
+
+The most widely used upper-air verification metric. Measures how well the forecast captures the pattern of **departures from climatology** — see [theory notes](forecast-verification-notes.md#63-methods-for-continuous-forecasts).
+
+```python
+def anomaly_correlation(fcst, obs, climo):
+    """Anomaly Correlation Coefficient (ACC).
+
+    Parameters:
+        fcst:  array of forecast values
+        obs:   array of observation values
+        climo: array of climatological values (same shape as fcst/obs)
+
+    Returns:
+        ACC value (-1 to 1, perfect = 1)
+    """
+    f, o, c = np.asarray(fcst), np.asarray(obs), np.asarray(climo)
+    fa = f - c   # forecast anomaly
+    oa = o - c   # observation anomaly
+
+    num = np.sum(fa * oa)
+    den = np.sqrt(np.sum(fa**2) * np.sum(oa**2))
+    return num / den if den > 0 else np.nan
+
+# Example: 500 hPa geopotential height ACC
+# Typically ACC > 0.6 is considered "useful skill"
+acc = anomaly_correlation(fcst_hgt500, obs_hgt500, climo_hgt500)
+print(f"500 hPa Height ACC = {acc:.3f}")
+```
+
+**Centered vs. uncentered ACC:** The function above is the **uncentered** (standard) ACC used operationally. The centered version subtracts the mean anomaly — use `np.corrcoef(fa, oa)[0, 1]` for that.
+
+```python
+def anomaly_correlation_centered(fcst, obs, climo):
+    """Centered ACC — removes mean anomaly bias."""
+    fa = np.asarray(fcst) - np.asarray(climo)
+    oa = np.asarray(obs) - np.asarray(climo)
+    return np.corrcoef(fa, oa)[0, 1]
+```
+
 ### Bootstrap Confidence Intervals
 
 ```python
-from scipy.stats import bootstrap
-
 def bootstrap_metric(fcst, obs, metric_func, n_resamples=1000, confidence=0.95):
     """Bootstrap confidence interval for any metric.
 
     Parameters:
-        fcst, obs: arrays of forecast and observation values
-        metric_func: function(fcst, obs) → scalar
-        n_resamples: number of bootstrap replicates
-        confidence: confidence level (e.g., 0.95)
+        fcst, obs:     arrays of forecast and observation values
+        metric_func:   function(fcst, obs) → scalar
+        n_resamples:   number of bootstrap replicates
+        confidence:    confidence level (e.g., 0.95)
 
     Returns:
         (estimate, lower_bound, upper_bound)
     """
-    def statistic(*args, axis):
-        idx = args[0].astype(int)
-        return np.array([metric_func(fcst[idx], obs[idx])])
+    fcst, obs = np.asarray(fcst), np.asarray(obs)
+    n = len(fcst)
+    rng = np.random.default_rng()
 
-    indices = (np.arange(len(fcst)),)
-    res = bootstrap(indices, statistic, n_resamples=n_resamples,
-                    confidence_level=confidence, method='percentile')
+    # Resample with replacement and compute metric each time
+    boot_values = np.empty(n_resamples)
+    for i in range(n_resamples):
+        idx = rng.integers(0, n, size=n)
+        boot_values[i] = metric_func(fcst[idx], obs[idx])
 
-    estimate = metric_func(fcst, obs)
-    return estimate, res.confidence_interval.low, res.confidence_interval.high
+    # Percentile confidence interval
+    alpha = (1 - confidence) / 2
+    lo = np.percentile(boot_values, 100 * alpha)
+    hi = np.percentile(boot_values, 100 * (1 - alpha))
+
+    return metric_func(fcst, obs), lo, hi
 
 # Example: bootstrap RMSE
 rmse_func = lambda f, o: np.sqrt(np.mean((f - o)**2))
 est, lo, hi = bootstrap_metric(fcst_at_obs, obs_valid['temperature_K'].values, rmse_func)
 print(f"RMSE = {est:.2f} [{lo:.2f}, {hi:.2f}]")
+
+# Example: bootstrap ME (bias)
+me_func = lambda f, o: np.mean(f - o)
+est, lo, hi = bootstrap_metric(fcst_at_obs, obs_valid['temperature_K'].values, me_func)
+print(f"ME   = {est:.2f} [{lo:.2f}, {hi:.2f}]")
 ```
 
 ### Partial Sums (for Correct Aggregation)
@@ -427,6 +489,96 @@ def aggregate_partial_sums(sums_list):
     rmse = np.sqrt(mse) if mse >= 0 else np.nan
 
     return {'N': total_n, 'ME': me, 'RMSE': rmse, 'FBAR': fbar, 'OBAR': obar}
+```
+
+### Wind Verification (Speed and Direction)
+
+Wind direction is **circular** — 359° and 1° are 2° apart, not 358°. Standard metrics (ME, RMSE) break on circular data. Wind speed is straightforward but should be verified alongside direction.
+
+#### Wind Speed
+
+```python
+def wind_speed(u, v):
+    """Compute wind speed from U and V components."""
+    return np.sqrt(np.asarray(u)**2 + np.asarray(v)**2)
+
+def wind_direction(u, v):
+    """Compute meteorological wind direction from U and V components.
+
+    Returns direction in degrees (0-360), where wind comes FROM.
+    """
+    return (270 - np.degrees(np.arctan2(v, u))) % 360
+
+# Verify wind speed with standard continuous metrics
+wspd_fcst = wind_speed(fcst_u10, fcst_v10)
+wspd_obs = wind_speed(obs_u10, obs_v10)
+wspd_metrics = continuous_metrics(wspd_fcst, wspd_obs)
+```
+
+#### Wind Direction Error (Circular)
+
+```python
+def wind_direction_error(fcst_dir, obs_dir):
+    """Signed circular difference between forecast and observed wind direction.
+
+    Returns values in [-180, 180] degrees.
+    Positive = forecast is clockwise of observed.
+    """
+    diff = np.asarray(fcst_dir) - np.asarray(obs_dir)
+    # Wrap to [-180, 180]
+    return (diff + 180) % 360 - 180
+
+def wind_direction_mae(fcst_dir, obs_dir):
+    """Mean Absolute Error for wind direction (circular)."""
+    return np.mean(np.abs(wind_direction_error(fcst_dir, obs_dir)))
+
+def wind_direction_bias(fcst_dir, obs_dir):
+    """Mean signed direction error (circular bias).
+
+    Uses vector averaging for correct circular mean.
+    """
+    err = np.radians(wind_direction_error(fcst_dir, obs_dir))
+    mean_err = np.arctan2(np.mean(np.sin(err)), np.mean(np.cos(err)))
+    return np.degrees(mean_err)
+
+# Example
+dir_fcst = wind_direction(fcst_u10, fcst_v10)
+dir_obs = wind_direction(obs_u10, obs_v10)
+
+dir_mae = wind_direction_mae(dir_fcst, dir_obs)
+dir_bias = wind_direction_bias(dir_fcst, dir_obs)
+print(f"Wind direction MAE  = {dir_mae:.1f}°")
+print(f"Wind direction bias = {dir_bias:.1f}°")
+```
+
+#### Vector Wind Error (RMSE of U/V Components)
+
+A simpler alternative — verify U and V components directly, which avoids circular issues entirely:
+
+```python
+def vector_wind_metrics(fcst_u, fcst_v, obs_u, obs_v):
+    """Compute vector wind difference statistics.
+
+    Returns VRMSE (vector RMSE) and speed/direction bias.
+    """
+    du = np.asarray(fcst_u) - np.asarray(obs_u)
+    dv = np.asarray(fcst_v) - np.asarray(obs_v)
+
+    # Vector RMSE: sqrt(mean(du² + dv²))
+    vrmse = np.sqrt(np.mean(du**2 + dv**2))
+
+    # Speed bias
+    spd_fcst = np.sqrt(np.asarray(fcst_u)**2 + np.asarray(fcst_v)**2)
+    spd_obs = np.sqrt(np.asarray(obs_u)**2 + np.asarray(obs_v)**2)
+    speed_bias = np.mean(spd_fcst - spd_obs)
+
+    return {'VRMSE': vrmse, 'speed_bias': speed_bias,
+            'U_ME': np.mean(du), 'V_ME': np.mean(dv)}
+
+# Example
+vwind = vector_wind_metrics(fcst_u10, fcst_v10, obs_u10, obs_v10)
+print(f"Vector RMSE  = {vwind['VRMSE']:.2f} m/s")
+print(f"Speed bias   = {vwind['speed_bias']:.2f} m/s")
 ```
 
 ---
@@ -1358,31 +1510,94 @@ plt.savefig('wrf_verification_summary.png', dpi=150, bbox_inches='tight')
 print("\nSaved: wrf_verification_summary.png")
 ```
 
-### Step 6: Verification by Lead Time (Multiple Init Times)
+### Step 6: Verification by Lead Time
+
+Loop over multiple lead times from a single initialization, collecting partial sums for correct aggregation.
 
 ```python
-# If you have multiple forecast lead times, loop and aggregate
+init_time = '2024-01-15_00'
 lead_hours = [6, 12, 18, 24, 36, 48, 72]
 lead_results = []
 
 for lead in lead_hours:
-    # Load forecast for this lead time (pseudo-code — adapt to your file naming)
-    # fcst_data = load_wrf_forecast(init_time, lead)
-    # obs_data = load_obs(valid_time)
-    # matched = match_fcst_to_obs(fcst_data, obs_data)
+    # Compute valid time from init + lead
+    init_dt = pd.Timestamp('2024-01-15 00:00')
+    valid_dt = init_dt + pd.Timedelta(hours=lead)
 
-    # Compute partial sums (for correct aggregation)
-    # ps = partial_sums(matched['fcst'], matched['obs'])
-    # ps['lead_h'] = lead
-    # lead_results.append(ps)
-    pass
+    # Load WRF forecast at this lead time
+    # Adapt the path pattern to your file naming convention
+    wrf_file = f'wrfprs_d01_{init_time}_f{lead:03d}.grb2'
+    try:
+        wrf_lead = xr.open_dataset(wrf_file, engine='cfgrib',
+                                   backend_kwargs={'filter_by_keys': {
+                                       'shortName': '2t', 'typeOfLevel': 'heightAboveGround'
+                                   }})
+    except FileNotFoundError:
+        print(f"  Skipping lead {lead}h — file not found")
+        continue
 
-# Aggregate by lead time
-# df_leads = pd.DataFrame(lead_results)
-# for lead in lead_hours:
-#     subset = df_leads[df_leads['lead_h'] == lead]
-#     agg = aggregate_partial_sums(subset.to_dict('records'))
-#     print(f"Lead {lead:3d}h: ME={agg['ME']:.2f}, RMSE={agg['RMSE']:.2f}")
+    t2m_lead = wrf_lead['t2m']
+    lats_lead = t2m_lead.latitude.values
+    lons_lead = t2m_lead.longitude.values
+
+    # Load obs for this valid time
+    obs_lead = obs[obs['datetime'] == valid_dt]
+    if len(obs_lead) == 0:
+        print(f"  Skipping lead {lead}h — no obs at {valid_dt}")
+        continue
+
+    # Match forecast → stations
+    fcst_vals = extract_bilinear(
+        t2m_lead.values, lats_lead, lons_lead,
+        obs_lead['lat'].values, obs_lead['lon'].values
+    )
+    obs_vals = obs_lead['temperature_K'].values
+
+    # Drop NaN pairs (stations outside grid)
+    valid_mask = ~(np.isnan(fcst_vals) | np.isnan(obs_vals))
+    f_valid, o_valid = fcst_vals[valid_mask], obs_vals[valid_mask]
+
+    if len(f_valid) < 5:
+        continue
+
+    # Compute partial sums (NOT derived metrics — for correct aggregation)
+    ps = partial_sums(f_valid, o_valid)
+    ps['lead_h'] = lead
+    lead_results.append(ps)
+    print(f"  Lead {lead:3d}h: {ps['N']} stations matched")
+
+# Aggregate and print summary table
+if lead_results:
+    print("\n=== Temperature Verification by Lead Time ===")
+    print(f"{'Lead':>6s}  {'N':>5s}  {'ME':>7s}  {'RMSE':>7s}")
+    print("-" * 32)
+    for ps in lead_results:
+        agg = aggregate_partial_sums([ps])
+        print(f"{ps['lead_h']:5d}h  {agg['N']:5d}  {agg['ME']:+7.2f}  {agg['RMSE']:7.2f}")
+
+    # Also aggregate across ALL lead times
+    total = aggregate_partial_sums(lead_results)
+    print("-" * 32)
+    print(f"{'All':>6s}  {total['N']:5d}  {total['ME']:+7.2f}  {total['RMSE']:7.2f}")
+```
+
+#### Plot RMSE vs Lead Time
+
+```python
+leads = [ps['lead_h'] for ps in lead_results]
+rmses = [aggregate_partial_sums([ps])['RMSE'] for ps in lead_results]
+mes = [aggregate_partial_sums([ps])['ME'] for ps in lead_results]
+
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.plot(leads, rmses, 'o-', color='C0', label='RMSE', linewidth=2)
+ax.plot(leads, mes, 's--', color='C1', label='ME (bias)', linewidth=2)
+ax.axhline(0, color='gray', linewidth=0.8)
+ax.set_xlabel('Lead Time (hours)')
+ax.set_ylabel('Error (K)')
+ax.set_title('2-m Temperature Verification by Lead Time')
+ax.legend()
+ax.grid(True, alpha=0.3)
+plt.savefig('rmse_by_lead.png', dpi=150, bbox_inches='tight')
 ```
 
 ---
@@ -1450,6 +1665,9 @@ correct_rmse = correct['RMSE']  # May differ significantly from 1.84
 | RMSE | `continuous_metrics()` | Sec 6.3 | CNT:RMSE | 0 to +inf | 0 |
 | r | `continuous_metrics()` | Sec 6.3 | CNT:PR_CORR | -1 to 1 | 1 |
 | Skill Score | `continuous_metrics()` | Sec 6.3 | CNT:MSE_SS | -inf to 1 | 1 |
+| ACC | `anomaly_correlation()` | Sec 6.3 | CNT:ANOM_CORR | -1 to 1 | 1 |
+| VRMSE | `vector_wind_metrics()` | Sec 6.3 | VCNT:RMSVE | 0 to +inf | 0 |
+| Dir MAE | `wind_direction_mae()` | — | VCNT:DIR_MAE | 0 to 180 | 0 |
 | POD | `categorical_metrics()` | Sec 6.1 | CTS:POD | 0 to 1 | 1 |
 | FAR | `categorical_metrics()` | Sec 6.1 | CTS:FAR | 0 to 1 | 0 |
 | CSI | `categorical_metrics()` | Sec 6.1 | CTS:CSI | 0 to 1 | 1 |
