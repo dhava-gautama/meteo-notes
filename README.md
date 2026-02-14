@@ -27,4 +27,5 @@ meteo-notes/
 - [WAVEWATCH III: Complete Guide](models/ww3-model-guide.md) — End-to-end WW3 v6.07 workflow: switch file system, all source term packages (ST1-ST6, NL1-NL5, IC0-IC5), grid types (regular/curvilinear/unstructured/SMC), multi-grid mosaic (ww3_multi), nesting, operational use (GFS-Wave, GEFS-Wave), ESMF/NUOPC coupling, and calibration.
 
 ### Observations
-*Coming soon*
+- [Surface Observations: Complete Guide](observations/surface-obs-guide.md) — SYNOP, METAR, and AWS formats, data sources (ISD, IEM, OGIMET, BMKG), Python decoding (eccodes, metar, siphon), quality control pipeline (range, consistency, spike, buddy, persistence checks), data processing, and preparation for MET/Python verification. Indonesian station network reference.
+- [Ocean Observations: Complete Guide](observations/ocean-obs-guide.md) — Moored buoys (NDBC, TAO/TRITON/RAMA), Argo floats, tide gauges, satellite products (SST, altimetry, scatterometer winds), Python access (erddapy, argopy, copernicusmarine, utide), quality control, and preparation for ROMS/SWAN/WW3 verification. Indonesian waters and ITF monitoring reference.
