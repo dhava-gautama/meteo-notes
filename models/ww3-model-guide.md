@@ -126,8 +126,7 @@ WW3 is a phase-averaged model. The sea state is described statistically by a 2D 
 ### Obtaining the Source Code
 
 ```bash
-# Fork then clone:
-git clone --recurse-submodules https://github.com/<your-username>/WW3.git
+git clone --recurse-submodules https://github.com/NOAA-EMC/WW3.git
 cd WW3
 
 # Download required binary/NetCDF data for regression tests:
