@@ -743,172 +743,202 @@ Generate interpolation weights between WRF d02, ROMS, and SWAN grids.
 
 ### Grid File Formats
 
-SWAN needs two files for bottom grid input: a **coordinate file** (`.grd`) and a **bathymetry file** (`.bot`).
+SWAN needs two files for curvilinear grid input: a **coordinate file** (`.grd`) and a **bathymetry file** (`.bot`). For **regular grids** (`CGRID REGular`), no `.grd` file is needed — the grid is defined entirely by the `CGRID` command parameters.
 
 #### Coordinate File (`.grd`)
 
-For curvilinear or unstructured grids, contains x/y (or lon/lat) values. Two blocks: all x-coordinates, then all y-coordinates. Space-separated, row-major order.
+Plain ASCII with **one value per line** in **Fortran column-major order**. Two consecutive blocks: all x-coordinates (longitudes) first, then all y-coordinates (latitudes).
+
+For a grid with NUMX × NUMY points, the file has `2 × NUMX × NUMY` lines total:
 
 ```
-$ swan_coord.grd
-$ x-coordinates (NUMX+1 values per row, NUMY+1 rows)
-105.0000  105.0100  105.0200  105.0300  ...
-105.0000  105.0100  105.0200  105.0300  ...
-...
-$ y-coordinates (same layout)
--7.0000  -7.0000  -7.0000  -7.0000  ...
--6.9900  -6.9900  -6.9900  -6.9900  ...
-...
+ 104.500000000000     ← lon(1,1)
+ 104.510000000000     ← lon(2,1)
+ 104.520000000000     ← lon(3,1)
+ ...                  ← (all longitudes, column-major)
+ 106.500000000000     ← lon(NUMX,NUMY)
+  -7.200000000000     ← lat(1,1)  — second half begins
+  -7.200000000000     ← lat(2,1)
+ ...
+  -5.500000000000     ← lat(NUMX,NUMY)
 ```
 
-For **regular grids** (`CGRID REGular`), no coordinate file is needed — the grid is defined entirely by the `CGRID` command parameters (origin, length, resolution).
+**Column-major order** means the x-index varies fastest: for grid point `(i,j)`, the longitude is at line `NUMX*(j-1) + i`, and the latitude is at line `NUMX*NUMY + NUMX*(j-1) + i`.
 
 #### Bathymetry File (`.bot`)
 
-Plain ASCII, space-separated depth values in meters (positive down). Row-major: first row is the southernmost (lowest y), values go west to east (increasing x).
+Plain ASCII, NUMY rows with NUMX space-separated depth values each. Depths are **positive downward**. Land points use the exception value **9999**.
 
 ```
-$ swan_bathy.bot
-  80.2  79.5  78.1  76.3  74.0  ...
-  82.1  81.3  80.0  78.5  76.2  ...
-  ...
+   9999.0000   9999.0000     80.2000     79.5000     78.1000  ...
+   9999.0000     82.1000     81.3000     80.0000     78.5000  ...
+   ...
 ```
 
-Dimensions must match `NUMX+1` columns × `NUMY+1` rows (matching the `INPGRID BOTTOM` command).
+#### The `idla` Parameter
 
-### Creating SWAN Grids with Python
+The `idla` parameter in `READGRID`/`READINP` controls spatial ordering. COAWST universally uses **`idla=4`** (data from lower-left corner, line breaks not required), matching ROMS Fortran array ordering.
 
-#### Regular Grid from GEBCO
+| idla | Description |
+|---|---|
+| 1 | From upper-left, row by row, line breaks required |
+| 3 | From lower-left, row by row, line breaks required |
+| 4 | From lower-left, free format (line breaks not required) — **COAWST standard** |
+
+### Dimension Gotcha: CGRID vs NUMX
+
+This is a critical source of confusion:
+
+- **`CGRID CURVILINEAR mxc myc`**: `mxc` and `myc` are the number of **meshes** (cells), not grid points
+- **Grid points** = meshes + 1: `NUMX = mxc + 1`, `NUMY = myc + 1`
+- **`scrip_coawst.in`** requires the full number of **grid points** (NUMX, NUMY)
+
+Example: ROMS grid with dimensions `(eta_rho=171, xi_rho=201)`:
+- SWAN NUMX = 201, NUMY = 171
+- CGRID CURVILINEAR **200 170** (meshes = points − 1)
+- scrip_coawst.in: `SWAN_NUMX=201, SWAN_NUMY=171` (grid points)
+
+### COAWST MATLAB Tool: `roms2swan.m`
+
+The primary tool is `Tools/mfiles/mtools/roms2swan.m`. It reads a ROMS grid and writes both SWAN files:
+
+```matlab
+% Usage — just one command:
+roms2swan('sunda_roms_grid.nc')
+% Creates: swan_coord.grd and swan_bathy.bot
+```
+
+What it does internally:
+1. Reads `lon_rho`, `lat_rho`, `h`, `mask_rho` from the ROMS grid
+2. Sets land points (`mask_rho == 0`) to 9999 in bathymetry
+3. Writes coordinates with `fprintf(fid,'%18.12f\n', x_rho)` — MATLAB's `fprintf` automatically outputs arrays in Fortran column-major order
+4. Writes bathymetry row by row
+
+Other COAWST MATLAB tools:
+
+| Script | Location | Purpose |
+|---|---|---|
+| `roms2swan.m` | `Tools/mfiles/mtools/` | Create `.grd` and `.bot` from ROMS grid |
+| `create_swan_2dspec_from_ww3.m` | `Tools/mfiles/mtools/` | SWAN spectral boundary from WW3 |
+| `create_swanTpar_from_WW3.m` | `Tools/mfiles/swan_forc/` | TPAR boundary from WW3 |
+
+### Python Equivalent: `roms2swan`
 
 ```python
 import numpy as np
-import xarray as xr
+import netCDF4 as nc
+
+def roms2swan(roms_grid_file,
+              coord_file='swan_coord.grd',
+              bath_file='swan_bathy.bot'):
+    """
+    Python equivalent of COAWST's roms2swan.m.
+    Creates SWAN .grd and .bot files from a ROMS grid.
+    """
+    ds = nc.Dataset(roms_grid_file)
+    lon_rho = ds.variables['lon_rho'][:]   # shape: (eta_rho, xi_rho)
+    lat_rho = ds.variables['lat_rho'][:]
+    h = ds.variables['h'][:]
+    mask_rho = ds.variables['mask_rho'][:]
+    ds.close()
+
+    # Mask land with 9999
+    h_swan = h.copy()
+    h_swan[mask_rho == 0] = 9999.0
+
+    ny, nx = lon_rho.shape
+    print(f"Grid points: NUMX={nx}, NUMY={ny}")
+    print(f"CGRID CURVILINEAR {nx-1} {ny-1}")
+
+    # Write coordinate file — one value per line, Fortran column-major order
+    # .T then flatten gives column-major ordering
+    with open(coord_file, 'w') as f:
+        for val in lon_rho.T.flatten():
+            f.write(f'{val:18.12f}\n')
+        for val in lat_rho.T.flatten():
+            f.write(f'{val:18.12f}\n')
+
+    # Write bathymetry file — NUMY rows, NUMX values each
+    with open(bath_file, 'w') as f:
+        for j in range(ny):
+            line = '   '.join(f'{h_swan[j, i]:12.4f}' for i in range(nx))
+            f.write(f'   {line}\n')
+
+    print(f"Created {coord_file} and {bath_file}")
+    return nx, ny
+
+# Usage:
+numx, numy = roms2swan('sunda_roms_grid.nc')
+```
+
+### Creating a Regular Grid from GEBCO (Python)
+
+If you don't have a ROMS grid yet, create a standalone SWAN regular grid:
+
+```python
+import numpy as np
+from scipy.interpolate import RegularGridInterpolator
+import netCDF4 as nc
 
 # Define SWAN domain
 lon_min, lon_max = 104.5, 106.5
 lat_min, lat_max = -7.5, -5.5
-dx, dy = 0.01, 0.01  # ~1 km resolution
+dx, dy = 0.01, 0.01  # ~1 km
 
-# Create grid coordinates
-lons = np.arange(lon_min, lon_max + dx, dx)
-lats = np.arange(lat_min, lat_max + dy, dy)
-numx = len(lons) - 1
-numy = len(lats) - 1
+lons = np.arange(lon_min, lon_max + dx/2, dx)
+lats = np.arange(lat_min, lat_max + dy/2, dy)
+numx, numy = len(lons), len(lats)
 
-# Load GEBCO bathymetry and interpolate onto SWAN grid
-gebco = xr.open_dataset('GEBCO_2024.nc')
-gebco_sub = gebco['elevation'].sel(
-    lon=slice(lon_min - 0.1, lon_max + 0.1),
-    lat=slice(lat_min - 0.1, lat_max + 0.1)
-)
+# Load and interpolate GEBCO
+gebco = nc.Dataset('GEBCO_2024.nc')
+g_lon = gebco.variables['lon'][:]
+g_lat = gebco.variables['lat'][:]
+mask_lon = (g_lon >= lon_min - 0.5) & (g_lon <= lon_max + 0.5)
+mask_lat = (g_lat >= lat_min - 0.5) & (g_lat <= lat_max + 0.5)
+elev = gebco.variables['elevation'][np.ix_(mask_lat, mask_lon)]
+gebco.close()
 
-# Interpolate to SWAN grid points
-from scipy.interpolate import RegularGridInterpolator
 interp = RegularGridInterpolator(
-    (gebco_sub.lat.values, gebco_sub.lon.values),
-    gebco_sub.values, method='linear'
-)
+    (g_lat[mask_lat], g_lon[mask_lon]), elev, method='linear')
 lon_grid, lat_grid = np.meshgrid(lons, lats)
-points = np.column_stack([lat_grid.ravel(), lon_grid.ravel()])
-depth_swan = -interp(points).reshape(lat_grid.shape)  # positive down
+depth = -interp(np.column_stack([lat_grid.ravel(),
+         lon_grid.ravel()])).reshape(lat_grid.shape)
 
-# Set minimum depth (important for stability)
-depth_swan = np.maximum(depth_swan, 5.0)
+# SWAN conventions: positive down, land = 9999
+depth[depth <= 0] = 9999.0
+depth = np.maximum(depth, 5.0)  # minimum depth for stability
 
-# Mask land as negative (SWAN convention: negative = land)
-depth_swan[depth_swan <= 0] = -99.0
-
-# Write bathymetry file
-np.savetxt('swan_bathy.bot', depth_swan, fmt='%10.2f')
-
-print(f"SWAN grid: NUMX={numx}, NUMY={numy}")
-print(f"Origin: ({lon_min}, {lat_min})")
-print(f"Length: ({lon_max - lon_min}, {lat_max - lat_min})")
+np.savetxt('swan_bathy.bot', depth, fmt='%10.2f')
+print(f"Regular grid: {numx} x {numy}")
 ```
 
-The corresponding SWAN input commands:
+Corresponding SWAN input (no `.grd` file needed for regular grids):
 
 ```
 CGRID REGular 104.5 -7.5 0.0 2.0 2.0 200 200 &
       CIRCLE 36 0.03 1.0 30
 
 INPGRID BOTTOM REGular 104.5 -7.5 0.0 200 200 0.01 0.01
-READINP BOTTOM 1.0 'swan_bathy.bot' 3 0 FREE
+READINP BOTTOM 1.0 'swan_bathy.bot' 4 0 FREE
 ```
 
-#### Curvilinear Grid (Matching ROMS)
-
-When ROMS uses a curvilinear grid, it helps to use the same grid for SWAN:
-
-```python
-import netCDF4 as nc
-
-# Read ROMS grid
-roms = nc.Dataset('roms_grid.nc')
-lon_rho = roms.variables['lon_rho'][:]
-lat_rho = roms.variables['lat_rho'][:]
-h = roms.variables['h'][:]
-
-numy, numx = lon_rho.shape
-numx -= 1
-numy -= 1
-
-# Write coordinate file (x-coords then y-coords)
-with open('swan_coord.grd', 'w') as f:
-    # Longitude block
-    for j in range(lon_rho.shape[0]):
-        line = '  '.join(f'{v:.6f}' for v in lon_rho[j, :])
-        f.write(line + '\n')
-    # Latitude block
-    for j in range(lat_rho.shape[0]):
-        line = '  '.join(f'{v:.6f}' for v in lat_rho[j, :])
-        f.write(line + '\n')
-
-# Write bathymetry (from ROMS h, already positive down)
-depth = np.maximum(h, 5.0)
-np.savetxt('swan_bathy.bot', depth, fmt='%10.2f')
-
-print(f"Curvilinear grid: NUMX={numx}, NUMY={numy}")
-```
-
-The SWAN input for a curvilinear grid:
+### Corresponding SWAN Input for Curvilinear Grid
 
 ```
-CGRID CURVilinear 200 200 EXC -99.0 &
-      CIRCLE 36 0.03 1.0 30
-READGRID COORDINATES 1.0 'swan_coord.grd' 3 0 FREE
+CGRID CURVilinear 200 170 EXC 9.999000e+003 &
+      CIRCLE 36 0.04 1.0 24
+READGRID COORDINATES 1 'swan_coord.grd' 4 0 0 FREE
 
-INPGRID BOTTOM CURVilinear 0 0 200 200 EXC -99.0
-READINP BOTTOM 1.0 'swan_bathy.bot' 3 0 FREE
-```
-
-### COAWST MATLAB Tools
-
-COAWST includes MATLAB scripts in `Tools/mfiles/swan_forc/`:
-
-| Script | Purpose |
-|---|---|
-| `create_swan_coord.m` | Create SWAN coordinate file from ROMS grid |
-| `create_swan_bathy.m` | Create SWAN bathymetry file from ROMS grid |
-| `swan_write_input.m` | Generate SWAN input file template |
-
-```matlab
-% MATLAB example (COAWST tools)
-roms_grid = 'roms_grid.nc';
-swan_coord_file = 'swan_coord.grd';
-swan_bathy_file = 'swan_bathy.bot';
-
-% Extract from ROMS grid
-create_swan_coord(roms_grid, swan_coord_file);
-create_swan_bathy(roms_grid, swan_bathy_file);
+INPGRID BOTTOM CURVilinear 0 0 200 170 EXC 9.999000e+003
+READINP BOTTOM 1 'swan_bathy.bot' 4 0 FREE
 ```
 
 ### Grid Alignment Tips
 
-- **Same domain as ROMS**: Easiest approach — use the same grid points. SCRIP weights become trivial (identity mapping).
-- **Slightly larger than ROMS**: SWAN domain can extend beyond ROMS to avoid wave energy losses at boundaries.
-- **Different resolution**: SWAN and ROMS grids can have different resolutions. SCRIP handles the interpolation. SWAN often uses coarser resolution than ROMS since wave physics doesn't require the same resolution as tidal/current dynamics.
-- **Spectral resolution**: 36 directional bins and 30 frequency bins (0.03–1.0 Hz) is standard. Increase directional bins for narrow straits where wave direction matters.
+- **Same grid as ROMS** (recommended): Use `roms2swan.m` or the Python equivalent. SCRIP weights become trivial (near-identity mapping). Simplifies debugging.
+- **Slightly larger than ROMS**: SWAN domain can extend beyond ROMS to avoid wave energy losses at boundaries. SCRIP handles interpolation.
+- **Different resolution**: SWAN and ROMS grids can differ in resolution. SWAN often uses coarser resolution since wave physics doesn't require the same resolution as tidal/current dynamics.
+- **Spectral resolution**: 36 directional bins and 24–30 frequency bins (0.04–1.0 Hz) is standard. Increase directional bins for narrow straits.
 
 ---
 
