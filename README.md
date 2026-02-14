@@ -16,6 +16,7 @@ meteo-notes/
 ### Verification
 - [Forecast Verification: Methods and Key Concepts](verification/forecast-verification-notes.md) — Comprehensive notes on verification metrics for dichotomous, multi-category, continuous, and probabilistic forecasts. Covers spatial verification, ensemble diagnostics, and rare event methods.
 - [MET (Model Evaluation Tools): Practical Verification Guide](verification/met-verification-guide.md) — Practical guide to MET v12.0 and METplus v6.0: installation, configuration, core tools (Point-Stat, Grid-Stat, Ensemble-Stat), spatial/object-based methods (MODE, MTD), tropical cyclone verification, Python embedding, METviewer/METplotpy visualization, and end-to-end workflows for WRF, precipitation, ensemble, and TC verification.
+- [Python Forecast Verification Guide](verification/python-verification-guide.md) — Lightweight verification using the scientific Python stack (numpy, pandas, xarray, scipy, scikit-learn, matplotlib): continuous, categorical, probabilistic, spatial (FSS), and ensemble (CRPS, rank histogram) metrics with complete code examples and end-to-end WRF verification workflow. No MET/METplus dependency.
 
 ### Models
 - [WRF Model: Complete Guide](models/wrf-model-guide.md) — End-to-end WRF v4.7 workflow: data download, WPS, physics options, hidden variable output, post-processing, WRF variants (DA, Chem, Fire, Hydro, Solar, MPAS), and JMA NWP reference settings.
