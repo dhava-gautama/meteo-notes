@@ -449,6 +449,8 @@ Default WRF uses a static SST from initialization. After 2–3 days over warm tr
 
 ## 12. Quick Decision Guide
 
+![WRF Parameterization Quick Guide for Indonesia](wrf-parameterization-quickguide.png)
+
 ```
 What's your grid spacing?
 
