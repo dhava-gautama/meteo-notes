@@ -1,535 +1,435 @@
-# WRF Parameterization: A Student-Friendly Guide
+# WRF Parameterization Guide
 
-> A plain-language guide to WRF physics parameterization options.
-> Goal: help university students understand **what each scheme does**, **when to use it**, and **what works best for Indonesia / tropical Maritime Continent**.
->
-> Reference: [WRF Physics References (NCAR)](https://www2.mmm.ucar.edu/wrf/users/physics/phys_references.html)
+Personal notes on WRF physics options — written so that someone picking up WRF for the first time can actually make sense of the namelist without drowning in jargon. Focused on what works for Indonesia and tropical domains.
+
+Ref: [NCAR Physics References](https://www2.mmm.ucar.edu/wrf/users/physics/phys_references.html)
 
 ---
 
 ## Table of Contents
 
-1. [What is Parameterization and Why Do We Need It?](#1-what-is-parameterization-and-why-do-we-need-it)
-2. [Microphysics — How Clouds and Rain Form](#2-microphysics--how-clouds-and-rain-form)
-3. [Cumulus Parameterization — Thunderstorms the Grid Can't See](#3-cumulus-parameterization--thunderstorms-the-grid-cant-see)
-4. [Planetary Boundary Layer (PBL) — The Air Near the Ground](#4-planetary-boundary-layer-pbl--the-air-near-the-ground)
-5. [Surface Layer — The Interface Between Air and Ground](#5-surface-layer--the-interface-between-air-and-ground)
-6. [Land Surface Model — What Happens on the Ground](#6-land-surface-model--what-happens-on-the-ground)
-7. [Radiation — Heating and Cooling from the Sun and Earth](#7-radiation--heating-and-cooling-from-the-sun-and-earth)
-8. [Other Options](#8-other-options)
-9. [Recommended Configurations for Indonesia](#9-recommended-configurations-for-indonesia)
-10. [The NSF NCAR Tropical Suite](#10-the-nsf-ncar-tropical-suite)
-11. [Common Mistakes Students Make](#11-common-mistakes-students-make)
-12. [How to Choose: A Decision Flowchart](#12-how-to-choose-a-decision-flowchart)
+1. [So What Even Is Parameterization?](#1-so-what-even-is-parameterization)
+2. [Microphysics (mp_physics)](#2-microphysics-mp_physics)
+3. [Cumulus (cu_physics)](#3-cumulus-cu_physics)
+4. [Boundary Layer / PBL (bl_pbl_physics)](#4-boundary-layer--pbl-bl_pbl_physics)
+5. [Surface Layer (sf_sfclay_physics)](#5-surface-layer-sf_sfclay_physics)
+6. [Land Surface (sf_surface_physics)](#6-land-surface-sf_surface_physics)
+7. [Radiation (ra_lw_physics / ra_sw_physics)](#7-radiation-ra_lw_physics--ra_sw_physics)
+8. [Other Stuff Worth Knowing](#8-other-stuff-worth-knowing)
+9. [Configs I'd Use for Indonesia](#9-configs-id-use-for-indonesia)
+10. [The NCAR Tropical Suite (Shortcut)](#10-the-ncar-tropical-suite-shortcut)
+11. [Mistakes I've Seen (and Made)](#11-mistakes-ive-seen-and-made)
+12. [Quick Decision Guide](#12-quick-decision-guide)
 
 ---
 
-## 1. What is Parameterization and Why Do We Need It?
+## 1. So What Even Is Parameterization?
 
-**Simple explanation:** WRF divides the atmosphere into a grid of boxes (e.g., 10 km × 10 km × 500 m). Physical processes that are **smaller than one grid box** cannot be directly calculated — they have to be **approximated** using simplified mathematical formulas. This approximation is called **parameterization**.
+WRF chops the atmosphere into grid boxes — say, 10 km wide and a few hundred meters tall. Anything that happens at a scale *smaller* than that box can't be directly simulated. You need a formula to approximate its effect. That formula is the parameterization.
 
-**Analogy:** Imagine you're counting the number of people in a city by looking at satellite photos with 1 km resolution. You can't see individual people, so you estimate: "residential area = ~5,000 people/km², commercial area = ~2,000 people/km²." That's parameterization — using rules to approximate what you can't directly resolve.
+Think of it this way: if your grid is 10 km, and a thunderstorm is 10 km wide, the whole storm sits inside one box. The model has no idea there's a thunderstorm in there unless you tell it to check for one — that's what the cumulus scheme does.
 
-**What needs parameterization in WRF?**
+Same idea applies to cloud droplets (billions of them in one box), turbulent eddies (meters to hundreds of meters, way below grid scale), radiation (photon-by-photon transfer isn't feasible), and soil/vegetation processes.
 
-| Process | Why it needs parameterization |
-|---|---|
-| **Individual cloud droplets** | Billions of droplets in one grid box — can't simulate each one |
-| **Thunderstorms** | A single thunderstorm is ~10 km, but your grid might be 20 km |
-| **Turbulent eddies** | Boundary layer eddies are meters to hundreds of meters — way smaller than the grid |
-| **Radiation transfer** | Photons interact with millions of gas molecules and cloud particles at sub-grid scale |
-| **Soil and vegetation** | A single grid cell contains diverse land types, soil layers, plant canopies |
-
-**Key principle:** As you make your grid finer (higher resolution), some processes no longer need parameterization — they become "resolved" by the grid itself. The most important example is **thunderstorms**: at dx < 4 km, the model can explicitly simulate them, so you turn off the cumulus parameterization.
+The important thing to remember: **as you increase resolution, some things stop needing parameterization.** The big one is convection — below ~4 km grid spacing, thunderstorms are actually resolved by the grid, so you *turn off* the cumulus scheme. More on that later.
 
 ---
 
-## 2. Microphysics — How Clouds and Rain Form
+## 2. Microphysics (`mp_physics`)
 
-**`mp_physics` in namelist.input**
+This handles what happens inside clouds: vapor condensing into droplets, droplets colliding and growing into rain, ice crystals forming, snow aggregating, graupel/hail forming. It runs at every grid point regardless of resolution.
 
-Microphysics controls **what happens inside a cloud**: how water vapor turns into droplets, how droplets grow into rain, how ice crystals form, and how snow and hail develop. It's always active regardless of resolution.
+### Background: moments and classes
 
-### Concepts You Need to Know
+**Classes** just means how many types of water/ice the scheme tracks:
+- 3-class: vapor + cloud water + rain. Warm rain only, no ice. Basically useless for real weather.
+- 5-class: adds ice crystals and snow.
+- 6-class: adds graupel (dense icy particles). This is the minimum you want for convective weather.
+- 7-class: separates hail from graupel.
 
-**Hydrometeor classes** = the types of water particles the scheme tracks:
-- **3-class:** vapor, cloud water, rain (warm rain only — no ice)
-- **5-class:** adds ice and snow
-- **6-class:** adds graupel (small hail / dense ice)
-- **7-class:** adds hail as separate from graupel
+**Single-moment** schemes only predict the *mass* of each class. They assume a fixed drop size distribution — basically "given X grams of rain per cubic meter, the drops are distributed like this." It's cheaper to compute but the drop sizes can't evolve.
 
-**Single-moment vs. double-moment:**
-- **Single-moment:** only predicts the **mass** (how much water/ice) in each category. Assumes a fixed size distribution — e.g., "if there's 1 g/m³ of rain, the droplets follow this fixed distribution of sizes." Faster but less realistic.
-- **Double-moment:** predicts both **mass** AND **number concentration** (how many droplets). This means the model can track changes in droplet sizes — e.g., lots of small droplets vs. few big drops. More realistic but more expensive.
+**Double-moment** schemes predict *both* mass and number concentration. So now the model knows whether there are lots of tiny drops or a few fat ones. This matters a lot for rain rates — and especially in the tropics where warm-rain collision-coalescence processes (big drops eating small drops) dominate.
 
-**Why it matters:** Double-moment schemes give better rain rates and better representation of drizzle vs. heavy downpours. For tropical rainfall in Indonesia (where warm rain processes dominate), the droplet size distribution makes a real difference.
+### The schemes
 
-### Scheme Reference
-
-| `mp_physics` | Name | Moments | Classes | Speed | Simple Description |
-|---|---|---|---|---|---|
-| 1 | **Kessler** | Single | 3 (warm rain only) | Fastest | Textbook warm-rain scheme. Cloud → rain by autoconversion. **No ice.** Only for learning and idealized experiments. Never use for real forecasts. |
-| 2 | **Purdue Lin** | Single | 6 | Fast | One of the oldest ice-phase schemes. Cheap and fast, but cloud droplet sizes are fixed and not very realistic. OK for coarse runs where you just need "some precipitation." |
-| 3 | **WSM3** | Single | 3 | Fast | Like Kessler but with a simple ice process. Cloud water below 0°C becomes ice, above 0°C stays liquid. Too simple for most real applications. |
-| 4 | **WSM5** | Single | 5 | Fast | Adds separate ice and snow to WSM3. Better than WSM3 but still missing graupel — underestimates heavy convective rain. |
-| 5 | **Eta (Ferrier)** | Single | Special | Fast | Used operationally in NCEP's old NAM model. Tracks total condensate rather than individual species. Good for operational speed, not great for research. |
-| 6 | **WSM6** | Single | 6 | Medium | Adds graupel to WSM5. **Good balance of speed and accuracy.** Used in the NCAR Tropical Suite. Popular for general-purpose simulations. Good starting point for students. |
-| 7 | **Goddard** | Single | 6 | Medium | NASA scheme, similar capability to WSM6 but different ice processes. Popular for tropical studies and in coupled atmosphere-ocean modeling. |
-| 8 | **Thompson** | Hybrid | 6 | Medium | Double-moment for rain and ice, single-moment for others. **Excellent all-around scheme** — one of the most validated and popular worldwide. Good for mixed-phase clouds, winter storms, and general use. |
-| 9 | **Milbrandt-Yau** | Double | 7 | Slow | Full double-moment with hail. Research-grade, computationally expensive. Used for severe storm studies. |
-| 10 | **Morrison** | Double | 6 | Medium-Slow | Full double-moment for all ice and liquid. **Gold standard for convection-permitting research** (dx < 4 km). Widely used and validated. |
-| 11 | **CAM 5.1** | Double | 5 | Slow | From the NCAR Community Atmosphere Model. Designed for climate simulations, not weather forecasting. |
-| 14 | **WDM5** | Double | 5 | Medium | Double-moment version of WSM5. Better than WSM5 but still no graupel. |
-| 16 | **WDM6** | Double | 6 | Medium | Double-moment version of WSM6. **Good upgrade from WSM6** — keeps the same structure but adds prognostic droplet numbers. Good for tropical convection. |
-| 17–21 | **NSSL** variants | Double | 6–7 | Slow | Developed for severe convective storms (supercells, tornadoes). Explicitly predicts hail size. Use `mp_physics=18` in v4.6+ with `nssl_*` flags. |
-| 24 | **WSM7** | Single | 7 | Medium | Adds hail to WSM6 as a separate category. Useful when you want hail without the cost of double-moment. |
-| 26 | **WDM7** | Double | 7 | Medium-Slow | Double-moment version of WSM7 with hail. |
-| 28 | **Thompson Aerosol-Aware** | Hybrid | 6 | Medium-Slow | Thompson + prognostic aerosol particles. Aerosols affect how many cloud droplets form (more aerosol → more but smaller drops → less rain, or delayed rain). Good for air quality and WRF-Chem studies. |
-| 50–53 | **P3** | Predicted | Flexible | Medium | Revolutionary approach: instead of fixed categories (snow, graupel, hail), uses **predicted particle properties** — each ice particle has its own mass, density, and rime fraction. Eliminates artificial conversions between ice types. Cutting-edge research. |
-| 55 | **Jensen ISHMAEL** | Predicted | Flexible | Medium-Slow | Similar to P3 — ice particle shapes evolve freely. Predicts aspect ratio (plate vs. column). Good for ice cloud research. |
-| 56 | **NTU** | Double | 6 | Medium | National Taiwan University scheme. Designed for East Asian and tropical convection. Newer scheme. |
-
-### Which Microphysics for Indonesia?
-
-**For students / first-time users:** Start with **WSM6 (6)** — it's fast, well-understood, and part of the Tropical Suite.
-
-**For better rainfall:** Use **Thompson (8)** or **WDM6 (16)** — the double-moment rain treatment better captures the heavy convective downpours common in Indonesia.
-
-**For research (convection-permitting):** Use **Morrison (10)** — the community standard for high-resolution studies.
-
-**Why this matters for Indonesia:** Indonesian rainfall is dominated by **warm rain processes** (collision-coalescence of big droplets in tropical maritime clouds). Schemes that track droplet number concentration (double-moment) better capture this. Single-moment schemes tend to rain too easily or produce the wrong rain rates.
-
----
-
-## 3. Cumulus Parameterization — Thunderstorms the Grid Can't See
-
-**`cu_physics` in namelist.input**
-
-This is the **most sensitive** parameterization choice for tropical regions like Indonesia. It controls how the model represents **convective clouds** (cumulonimbus, thunderstorms) that are too small for the grid to resolve directly.
-
-### The Golden Rule
-
-| Grid spacing (dx) | What to do |
-|---|---|
-| **> 10 km** | Cumulus parameterization **ON** (required) |
-| **4–10 km** | "Grey zone" — use scale-aware scheme or turn off |
-| **< 4 km** | Cumulus parameterization **OFF** (`cu_physics = 0`) |
-
-**Why?** At dx > 10 km, a thunderstorm (~10 km wide) fits inside one grid box — the model can't "see" it, so you need a formula to estimate its effects. At dx < 4 km, the model resolves individual storm cells explicitly — using a cumulus scheme on top of that would **double-count** the rainfall (once from the explicit model, once from the parameterization). This double-counting is one of the most common mistakes.
-
-### How Cumulus Schemes Work (Two Approaches)
-
-**Mass-flux schemes** (KF, Grell-Freitas, Tiedtke): Imagine a hot air "conveyor belt" shooting up through the atmosphere. The scheme calculates how much air goes up (updraft), how much comes down (downdraft), how much water condenses, and how much the surrounding air is affected. It "triggers" when the atmosphere is unstable enough.
-
-**Adjustment schemes** (Betts-Miller-Janjic): Instead of simulating a conveyor belt, this scheme looks at the atmospheric profile and says "this profile looks too unstable, let me adjust it toward what the atmosphere looks like *after* a thunderstorm has passed." It relaxes the profile toward a reference state.
-
-### Scheme Reference
-
-| `cu_physics` | Name | Type | Simple Description |
-|---|---|---|---|
-| 0 | **None** | — | No cumulus parameterization. **Required when dx < 4 km.** The model resolves convection itself. |
-| 1 | **Kain-Fritsch (KF)** | Mass-flux | The **most popular** cumulus scheme worldwide. Triggers when CAPE (stored storm energy) exceeds a threshold, then removes CAPE over a time period. Handles both deep thunderstorms and shallow fair-weather cumulus. Works well for mid-latitudes. Can be too aggressive in the tropics (triggers too easily → too much rain over Indonesia). |
-| 2 | **Betts-Miller-Janjic (BMJ)** | Adjustment | Adjusts the atmospheric profile toward a post-convective reference. Produces **lighter, more widespread** rain (stratiform-like). Less "bursty" than KF. Popular for tropical cyclone and tropical applications. Can underestimate heavy local downpours. |
-| 3 | **Grell-Freitas (GF)** | Mass-flux, scale-aware | **Scale-aware** — automatically reduces its activity as resolution increases toward convection-permitting. Uses an ensemble of different closure assumptions. **Best for nesting** where outer domain is coarse (needs cumulus) and inner domain is fine (resolves convection). Smooth transition without manual on/off switching. |
-| 5 | **Grell-3D** | Mass-flux, ensemble | Older version of Grell-Freitas without scale-awareness. Uses subsidence spreading to neighboring grid cells. Still used but GF (3) is recommended instead. |
-| 6 | **Tiedtke** | Mass-flux | From ECMWF (the European weather center). Handles deep, shallow, and mid-level convection separately. Uses moisture convergence to trigger convection — **good for the tropics** where surface moisture convergence drives most thunderstorms. |
-| 7 | **Zhang-McFarlane** | Mass-flux | CAPE-based deep convection from NCAR's global climate model. Designed for climate simulations, not regional forecasting. |
-| 10 | **KF-CuP** | Mass-flux | KF with Cumulus Potential — couples with the radiation scheme so that sub-grid cumulus clouds affect the radiation budget. Better for solar energy applications. |
-| 11 | **Multi-scale KF** | Mass-flux, scale-aware | Modified KF with scale-awareness. An alternative to GF for the grey zone. |
-| 14 | **New SAS** | Mass-flux | New Simplified Arakawa-Schubert. Used in NCEP's GFS global model. CAPE-based with deep and shallow components. |
-| 16 | **New Tiedtke** | Mass-flux | **Updated Tiedtke** with improved CAPE closure for deep convection and better detrainment (how cloud air mixes into the environment). Better diurnal cycle of convection than the old Tiedtke. **Used in the NCAR Tropical Suite.** Good for Indonesia. |
-| 84 | **HWRF SAS** | Mass-flux | SAS variant optimized for NOAA's Hurricane WRF (HWRF). Deep + shallow. Tuned for tropical cyclone intensity prediction. |
-| 93 | **Grell-Devenyi** | Mass-flux, ensemble | Predecessor of Grell-Freitas. Uses ensemble of closure assumptions but not scale-aware. Use GF (3) instead. |
-
-### Which Cumulus Scheme for Indonesia?
-
-**Best options:**
-1. **New Tiedtke (16)** — part of the Tropical Suite, moisture-convergence trigger works well for maritime convection
-2. **Grell-Freitas (3)** — best for nested domains (e.g., 27 km → 9 km → 3 km), automatically handles the transition
-3. **BMJ (2)** — good for tropical cyclone studies, produces realistic widespread tropical rain
-
-**Avoid for Indonesia:**
-- **KF (1)** can be too aggressive in the tropics — it triggers too easily in the warm, moist maritime atmosphere, often producing **too much rainfall** and too-early rainfall (wrong diurnal cycle)
-- If you must use KF, try `kfeta_trigger = 2` (moisture-advection trigger) which reduces false triggers
-
-**Key issue for Indonesia — the diurnal cycle:**
-Over the Maritime Continent, rainfall has a strong diurnal pattern: convection starts over land in the afternoon (solar heating) and moves offshore at night. Getting this right depends heavily on the cumulus scheme. New Tiedtke (16) and BMJ (2) generally handle this better than KF (1).
-
----
-
-## 4. Planetary Boundary Layer (PBL) — The Air Near the Ground
-
-**`bl_pbl_physics` in namelist.input**
-
-The PBL is the lowest ~1–2 km of the atmosphere that directly "feels" the Earth's surface. During the day, the sun heats the ground, which heats the air above, creating turbulent eddies that mix heat, moisture, and momentum vertically. The PBL scheme parameterizes this turbulent mixing.
-
-### Two Philosophies
-
-**Non-local mixing** (e.g., YSU): "Big eddies can transport heat from the surface all the way to the PBL top in one step." Adds a **counter-gradient** term that allows mixing across the entire PBL depth, not just between neighboring layers. Good for well-mixed daytime convective boundary layers.
-
-**Local / TKE-based** (e.g., MYJ, MYNN): "Mixing only happens between adjacent layers, driven by local turbulence." Predicts a **Turbulence Kinetic Energy (TKE)** variable that tracks how much turbulence exists at each level. More conservative — tends to produce shallower, less well-mixed PBLs. Better for stable (nighttime) conditions and marine environments.
-
-**Analogy:**
-- Non-local = a big spoon stirring the entire pot at once
-- Local/TKE = each layer only mixes with the layer directly above/below it, like diffusion
-
-### Scheme Reference
-
-| `bl_pbl_physics` | Name | Type | Required `sf_sfclay_physics` | Simple Description |
+| # | Name | Moments | Classes | Notes |
 |---|---|---|---|---|
-| 1 | **YSU** | Non-local | 1 (Revised MM5) | **Most popular general-purpose PBL scheme.** Yonsei University. Good for clear-sky daytime convection over land. Well-mixed boundary layers. Simple, fast, reliable. Used in the Tropical Suite. |
-| 2 | **MYJ** | Local, TKE | 2 (Eta Similarity) | Mellor-Yamada-Janjic Level 2.5. From NCEP's NAM model. Produces shallower PBLs than YSU. Better for stable/nighttime conditions. **Required if you use BEP/BEM urban schemes.** |
-| 4 | **QNSE** | Local, TKE | 4 (QNSE) | Quasi-Normal Scale Elimination. Good for stable boundary layers (nighttime, arctic). Not commonly used for tropical applications. |
-| 5 | **MYNN-EDMF** | Local, TKE + mass-flux | 5 (MYNN) | Mellor-Yamada-Nakanishi-Niino with Eddy-Diffusivity Mass-Flux. **Increasingly the recommended default.** Excellent for marine environments, fog, and low clouds. The mass-flux component handles shallow convection internally. Best for coastal/island domains like Indonesia. |
-| 7 | **ACM2** | Hybrid | 7 (Pleim-Xiu) | Asymmetric Convective Model. Combines non-local upward transport with local downward diffusion. Designed for air quality modeling (EPA's CMAQ). |
-| 8 | **BouLac** | Local, TKE | 1 or 2 | Bougeault-Lacarrère. Mixing length based on terrain geometry. **Good for complex mountainous terrain** — important for Indonesian islands with steep volcanoes. |
-| 11 | **Shin-Hong** | Non-local, scale-aware | 1 | Scale-aware version of YSU for the grey zone (dx ~ 100 m to 1 km). Used for LES-like simulations. |
-| 12 | **GBM** | Local, TKE | 1 | Grenier-Bretherton-McCaa. Designed for marine stratocumulus. |
+| 1 | Kessler | Single | 3 | The original textbook scheme. No ice at all. Only useful for idealized experiments or coursework. Don't use this for actual forecasting. |
+| 2 | Purdue Lin | Single | 6 | Old but fast. Fixed droplet sizes. If you just need precipitation to show up and don't care much about accuracy, it works. |
+| 3 | WSM3 | Single | 3 | Kessler + a crude ice process (below 0°C, cloud water becomes ice). Still too simple. |
+| 4 | WSM5 | Single | 5 | Better — has separate ice and snow. But no graupel, so heavy convective rain will be underestimated. |
+| 5 | Eta (Ferrier) | Single | mixed | NCEP's old operational scheme. Tracks total condensate rather than individual species. Fast, but a bit of a black box. |
+| 6 | **WSM6** | Single | 6 | The workhorse. Adds graupel, decent ice processes. Good speed-accuracy balance. Part of the NCAR Tropical Suite. **Start here if you're a student.** |
+| 7 | Goddard | Single | 6 | NASA's scheme. Similar to WSM6 in capability but different ice physics. Shows up a lot in tropical and coupled modeling papers. |
+| 8 | **Thompson** | Hybrid | 6 | Double-moment for rain and ice, single-moment for the rest. Probably the most popular scheme worldwide right now. Well-validated across many weather regimes. Works well pretty much everywhere. |
+| 9 | Milbrandt-Yau | Double | 7 | Full double-moment including hail. Expensive. Mainly for severe storm research. |
+| 10 | **Morrison** | Double | 6 | Full double-moment for everything. The go-to scheme for convection-permitting research (dx < 4 km). If you're running high-res and want to do it right, this is it. |
+| 11 | CAM 5.1 | Double | 5 | From NCAR's climate model. Meant for climate runs, not weather. |
+| 14 | WDM5 | Double | 5 | Double-moment WSM5. No graupel though. |
+| 16 | **WDM6** | Double | 6 | Double-moment WSM6. A nice middle ground — familiar WSM6 structure but with prognostic droplet number. Good for tropical convection without going full Morrison. |
+| 17–21 | NSSL variants | Double | 6–7 | Built for severe storms (supercells, tornadoes, hail). In WRF v4.6+, just use `mp_physics=18` and toggle features with `nssl_*` flags. |
+| 24 | WSM7 | Single | 7 | WSM6 + separate hail. When you want hail but don't want double-moment cost. |
+| 26 | WDM7 | Double | 7 | Double-moment with hail. |
+| 28 | Thompson Aerosol-Aware | Hybrid | 6 | Thompson but with prognostic aerosol. More pollution → more small droplets → different rainfall. Good for WRF-Chem or air quality studies. |
+| 50–53 | **P3** | Predicted properties | Flexible | This is the new-school approach. Instead of fixed categories (snow vs. graupel vs. hail), each ice particle carries its own properties (mass, rime fraction, density). No more artificial "snow converts to graupel" thresholds. Really elegant, but still newer and less widely tested. |
+| 55 | Jensen ISHMAEL | Predicted | Flexible | Similar idea to P3, also tracks ice crystal shape (plates vs. columns). Niche but interesting for ice cloud research. |
+| 56 | NTU | Double | 6 | National Taiwan University. Tuned for East Asian and tropical convection. Worth watching. |
 
-### Which PBL for Indonesia?
+### What I'd pick for Indonesia
 
-**Best options:**
-1. **MYNN-EDMF (5)** — excellent for maritime/coastal environments (most of Indonesia is coastal!). Handles sea breeze circulations and low marine clouds well. Built-in shallow convection.
-2. **YSU (1)** — solid general-purpose choice, part of the Tropical Suite. Good for land-dominated domains.
-3. **BouLac (8)** — consider for domains with steep terrain (e.g., Java's volcanic mountains, Papua highlands) where terrain-influenced turbulence matters.
+**Learning/assignments:** WSM6 (6). It's simple, it's documented everywhere, and it's in the Tropical Suite.
 
-**Important rule:** You **must** pair the PBL scheme with its matching surface layer scheme. Using the wrong pair will give physically inconsistent results (the model runs but the answers are wrong!).
+**Better results:** Thompson (8) or WDM6 (16). The double-moment rain really helps with tropical maritime convection. Indonesian rainfall is heavily warm-rain driven (collision-coalescence in those fat tropical cumulus towers), and single-moment schemes tend to get the rain rates wrong.
 
-| PBL Scheme | Must Use Surface Layer |
+**Serious research at high-res:** Morrison (10). Community standard for convection-permitting work.
+
+---
+
+## 3. Cumulus (`cu_physics`)
+
+This is probably the single most important choice for tropical simulations. It controls how the model represents thunderstorms and deep convection that the grid can't resolve.
+
+### The one rule you absolutely must know
+
+| Grid spacing | Cumulus scheme |
+|---|---|
+| dx > 10 km | **ON** — the model can't see thunderstorms, needs help |
+| dx = 4–10 km | Grey zone — tricky, use scale-aware or turn off |
+| dx < 4 km | **OFF** (`cu_physics = 0`) — storms are resolved explicitly |
+
+If you leave a cumulus scheme on at 3 km resolution, you get double-counting: the model resolves the storm *and* the parameterization adds its own version on top. Result: way too much rain. I've seen people get 200+ mm rainfall over Jakarta in a 6-hour forecast because of this.
+
+### How they work — two approaches
+
+**Mass-flux schemes** (most of them): Picture a hot updraft column punching through the atmosphere. The scheme figures out how much air goes up, how much comes back down, how much water condenses and falls out, and how the surrounding air responds (subsidence warming, drying). It needs a "trigger" — usually something like "CAPE exceeds X" or "there's enough low-level convergence."
+
+**Adjustment schemes** (BMJ): Different philosophy. It looks at the temperature and moisture profile and says "this looks like it wants to convect." Then it nudges the profile toward what you'd expect *after* a storm has already happened. Less physics, more empiricism.
+
+### The schemes
+
+| # | Name | Type | What you need to know |
+|---|---|---|---|
+| 0 | **Off** | — | Required below ~4 km. The model handles convection on its own. |
+| 1 | **Kain-Fritsch (KF)** | Mass-flux | Everybody's first cumulus scheme. CAPE-based trigger, removes CAPE over a relaxation timescale. Does both deep and shallow. Works great in mid-latitudes. **But** it tends to fire too aggressively in the tropics — the maritime atmosphere is so warm and moist that KF thinks everything should convect, producing too much rain with the wrong timing. If you're over Indonesia with KF and your rainfall is terrible, this is probably why. |
+| 2 | **Betts-Miller-Janjic (BMJ)** | Adjustment | Produces more gentle, widespread rain instead of intense localized bursts. Good for tropical cyclones. Some people find it underestimates heavy convective events, but for large-scale tropical rainfall patterns it works nicely. |
+| 3 | **Grell-Freitas (GF)** | Mass-flux, scale-aware | This is the one I'd recommend for nested runs. It's **scale-aware**, meaning it automatically backs off as your grid gets finer. So you can use it on a 9 km domain (grey zone) and it'll do the right thing — no need to manually switch schemes between nests. Also runs an internal ensemble of different closure assumptions for robustness. |
+| 5 | Grell-3D | Mass-flux, ensemble | Older Grell without scale-awareness. Still around, but GF (3) is strictly better. |
+| 6 | Tiedtke | Mass-flux | Originally from ECMWF. Uses moisture convergence to trigger — which is more physically relevant in the tropics than CAPE thresholds, because tropical convection is often driven by low-level convergence (sea breezes, ITCZ, land-sea contrasts). Handles deep + shallow + mid-level convection separately. |
+| 7 | Zhang-McFarlane | Mass-flux | From NCAR's global climate model. CAPE-based. Designed for GCM-scale, not really for regional WRF. |
+| 10 | KF-CuP | Mass-flux | KF with cumulus-radiation coupling. Sub-grid cumulus clouds interact with the radiation scheme. Useful for solar energy forecasting. |
+| 11 | Multi-scale KF | Mass-flux, scale-aware | KF with some scale-awareness added. An alternative to GF in the grey zone, but GF is more mature. |
+| 14 | New SAS | Mass-flux | Simplified Arakawa-Schubert, used in GFS. CAPE-based with deep and shallow components. |
+| 16 | **New Tiedtke** | Mass-flux | Updated Tiedtke with better CAPE closure and improved detrainment. **Part of the NCAR Tropical Suite.** Handles the diurnal cycle of convection better than the old version. For the Maritime Continent, where afternoon convection over land and nighttime propagation offshore is a big deal, this matters. |
+| 84 | HWRF SAS | Mass-flux | Tuned specifically for hurricane intensity in NOAA's HWRF. |
+| 93 | Grell-Devenyi | Mass-flux, ensemble | Predecessor to GF. Not scale-aware. Use GF (3) instead. |
+
+### For Indonesia specifically
+
+**Go-to choices:**
+1. **New Tiedtke (16)** — it's in the Tropical Suite for a reason. The moisture-convergence trigger is a natural fit for maritime convection.
+2. **Grell-Freitas (3)** — the best option if you're nesting (e.g., 27 km outer, 9 km middle, 3 km inner). Handles the scale transition gracefully.
+3. **BMJ (2)** — works well for TC studies and gives decent large-scale tropical rainfall.
+
+**Be careful with:**
+- **KF (1)** over Indonesia. It just fires too much. If you must use it, set `kfeta_trigger = 2` (moisture-advection trigger) — it helps reduce the false alarms.
+
+**The diurnal cycle problem:** Over islands like Java, Sumatra, and Kalimantan, convection has a very distinct daily rhythm — heating triggers storms in the afternoon over land, then they propagate offshore at night. Many cumulus schemes get this wrong (especially KF). New Tiedtke and BMJ tend to handle it better, but honestly, none of them nail it perfectly at coarse resolution. Going convection-permitting (dx < 4 km, `cu_physics = 0`) is the real fix.
+
+---
+
+## 4. Boundary Layer / PBL (`bl_pbl_physics`)
+
+The PBL is the bottom ~1–2 km of the atmosphere — the part that directly responds to the surface. During the day, solar heating creates turbulent eddies that mix heat, moisture, and momentum vertically. At night, the surface cools and the PBL stabilizes. The PBL scheme parameterizes all this turbulent mixing.
+
+### Two schools of thought
+
+**Non-local** (YSU and friends): Big eddies in the convective boundary layer can carry air from the surface to the PBL top in one shot. These schemes add a "counter-gradient" correction that allows mixing across the entire PBL depth, not just between neighboring model levels. Think of it as stirring a pot with a big spoon — one stir mixes everything.
+
+**Local / TKE** (MYJ, MYNN, BouLac): Mixing only happens between adjacent levels, driven by local shear and buoyancy. The scheme carries a prognostic TKE (turbulence kinetic energy) variable that tells you how turbulent each level is. More conservative — tends to produce shallower, more stratified boundary layers. Works better for stable conditions (nighttime, over ocean) and marine environments.
+
+### The schemes
+
+| # | Name | Type | Pair with `sf_sfclay` | What's it good for |
+|---|---|---|---|---|
+| 1 | **YSU** | Non-local | 1 (Rev. MM5) | The default everyone starts with. Yonsei University scheme. Produces well-mixed daytime boundary layers. Simple, reliable, well-documented. Good over land in clear-sky conditions. Part of the Tropical Suite. |
+| 2 | **MYJ** | Local, TKE | 2 (Eta) | Mellor-Yamada-Janjic Level 2.5. Heritage from NAM/Eta. Shallower PBLs than YSU. Required if you want to use the multi-layer urban schemes (BEP/BEM). Better for stable/nocturnal conditions. |
+| 4 | QNSE | Local, TKE | 4 | Quasi-Normal Scale Elimination. Meant for stable boundary layers (arctic, nighttime). Not common for tropical work. |
+| 5 | **MYNN-EDMF** | Local, TKE + mass-flux | 5 (MYNN) | This one's been gaining ground as the new recommended default. Mellor-Yamada-Nakanishi-Niino with an added mass-flux component that handles shallow convection internally. Really good for marine environments, fog, low clouds, and coastal circulations. **For Indonesia, where most of the domain is ocean or coastline, this is probably the best pick.** |
+| 7 | ACM2 | Hybrid | 7 (Pleim-Xiu) | Non-local upward, local downward. Specifically for EPA's air quality modeling chain (CMAQ). |
+| 8 | BouLac | Local, TKE | 1 or 2 | Bougeault-Lacarrere. The mixing length accounts for terrain geometry. If you're simulating over Java's volcanic peaks or the Papua highlands, this scheme knows about the terrain influence on turbulence. Worth considering for complex-terrain domains. |
+| 11 | Shin-Hong | Non-local, scale-aware | 1 | Scale-aware YSU for the sub-km grey zone (LES-like). |
+| 12 | GBM | Local, TKE | 1 | Grenier-Bretherton-McCaa. For marine stratocumulus. |
+
+### PBL–surface layer pairing
+
+This trips people up. Each PBL scheme **requires** a specific surface layer scheme. If you mix them, the model will run but the surface fluxes will be inconsistent — you'll get wrong temperatures and winds near the surface.
+
+| PBL | Surface layer it needs |
 |---|---|
 | YSU (1) | Revised MM5 (1) |
 | MYJ (2) | Eta Similarity (2) |
 | MYNN (5) | MYNN (5) |
 | ACM2 (7) | Pleim-Xiu (7) |
-
----
-
-## 5. Surface Layer — The Interface Between Air and Ground
-
-**`sf_sfclay_physics` in namelist.input**
-
-The surface layer is the lowest ~10–100 meters of the atmosphere. This scheme calculates **exchange coefficients** — how efficiently heat, moisture, and momentum are transferred between the Earth's surface and the atmosphere. Think of it as the "handshake" between the ground and the air.
-
-It uses **Monin-Obukhov Similarity Theory** — a set of equations that relate wind speed, temperature, and humidity at a reference height (usually 2 m for temperature, 10 m for wind) to surface fluxes.
-
-### Scheme Reference
-
-| `sf_sfclay_physics` | Name | Paired PBL | Simple Description |
-|---|---|---|---|
-| 1 | **Revised MM5** | YSU (1), BouLac (8) | Standard Monin-Obukhov with viscous sub-layer. Most widely used. Computes friction velocity (u*) and heat/moisture exchange coefficients. Good all-around. |
-| 2 | **Eta Similarity** | MYJ (2) | Janjic's version from NAM. More conservative surface fluxes (lower) in strongly unstable conditions. Iterative solution. |
-| 5 | **MYNN** | MYNN (5) | Better roughness length over water (Charnock formula + viscous layer). **Better for ocean/coastal surfaces.** Handles very stable conditions well. |
-| 7 | **Pleim-Xiu** | ACM2 (7) | For air quality modeling. Adjusts soil moisture indirectly using 2-m observations. |
-| 91 | **Old MM5** | Any (legacy) | Original MM5 without viscous sub-layer. **Don't use for new simulations.** |
-
-**For Indonesia:** Use **MYNN (5)** for ocean-heavy domains (e.g., Indonesian seas, maritime continent-scale domains) or **Revised MM5 (1)** for land-focused domains.
-
-### Special Options for Tropical Cyclones
-
-```
-isftcflx = 1     ! Modified exchange coefficients for high winds (> 30 m/s)
-                  ! Reduces momentum exchange, increases enthalpy exchange
-                  ! → Allows stronger TCs (more realistic intensity)
-```
-
----
-
-## 6. Land Surface Model — What Happens on the Ground
-
-**`sf_surface_physics` in namelist.input**
-
-The land surface model (LSM) calculates everything that happens at the Earth's surface: soil temperature, soil moisture, evapotranspiration (how plants release water vapor), snow cover, and surface energy balance. It provides the **lower boundary condition** for the atmosphere.
-
-### Scheme Reference
-
-| `sf_surface_physics` | Name | Soil Layers | Simple Description |
-|---|---|---|---|
-| 1 | **5-layer Thermal Diffusion** | 5 | Simplest — only diffuses heat through soil layers. **No vegetation, no evapotranspiration, no soil moisture.** Only for quick tests. Never for real simulations. |
-| 2 | **Noah** | 4 | **Operational standard** at NCEP. Predicts soil temperature, soil moisture, snowpack, canopy water. Includes frozen soil and evapotranspiration. Well-tested and reliable. Good for most applications. Used in the Tropical Suite. |
-| 3 | **RUC** | 6–9 | Rapid Update Cycle LSM. More soil layers, multi-layer snow. Good for winter weather and soil moisture. Not commonly used for tropical applications. |
-| 4 | **Noah-MP** | 4 | **Noah Multi-Physics** — the most advanced option. Adds: separate vegetation canopy layer (plants are "above" the soil, not smeared into it), dynamic vegetation (plants grow and die seasonally), multi-layer snowpack, groundwater table, and multiple options for each process. Best for research. |
-| 5 | **CLM4** | 10 | Community Land Model v4. 10 soil layers, 5 snow layers, sophisticated biogeophysics (photosynthesis). Most detailed but very expensive. Best for climate simulations. |
-| 7 | **Pleim-Xiu** | 2 | Only 2 soil layers. For EPA air quality chain. Pairs with ACM2 PBL. |
-| 8 | **SSiB** | 3 | Simplified Simple Biosphere. 3 soil layers with detailed vegetation biophysics. Used in some tropical studies. |
-
-### Which LSM for Indonesia?
-
-**For students / operational use:** **Noah (2)** — reliable, fast, well-tested.
-
-**For research:** **Noah-MP (4)** — the separate vegetation canopy is important for tropical forests. Indonesian rainforests have dense canopies that intercept rainfall (canopy interception can be 10–30% of total rainfall) and transpire heavily. Noah-MP handles this; basic Noah does not.
-
-**Why it matters:** Over Kalimantan, Sumatra, and Papua (dense tropical forest), the land surface strongly controls moisture supply to the atmosphere. An LSM that properly represents tropical forests will produce better local convection and rainfall.
-
----
-
-## 7. Radiation — Heating and Cooling from the Sun and Earth
-
-**`ra_sw_physics` (shortwave/solar) and `ra_lw_physics` (longwave/thermal) in namelist.input**
-
-Radiation schemes calculate how much energy the atmosphere receives from the sun (**shortwave**) and how much the Earth and atmosphere emit back to space (**longwave/infrared**). They control the temperature profile — and in the tropics, where solar heating is strong year-round, getting radiation right is critical.
-
-### Scheme Reference
-
-| `ra_lw_physics` / `ra_sw_physics` | Name | Bands (LW/SW) | Simple Description |
-|---|---|---|---|
-| 1 (LW) / 1 (SW) | **RRTM / Dudhia** | 16 / 1 | LW: Accurate correlated-k longwave. SW: Simple broadband — fast but less accurate for clear-sky solar. OK for quick runs. |
-| 4 / 4 | **RRTMG / RRTMG** | 16 / 14 | **Recommended default.** Accurate, multi-band treatment for both LW and SW. Handles sub-grid cloud variability (McICA). Supports aerosol effects. Best balance of speed and accuracy. Used in the Tropical Suite. |
-| 5 / 5 | **New Goddard** | 10 / 11 | NASA scheme. Good for tropical cloud-radiation studies. Slightly more expensive than RRTMG. |
-| 7 / 7 | **Fu-Liou-Gu** | — | Research-grade. More spectral detail. Good for aerosol-radiation interaction studies. |
-| 14 / 14 | **RRTMG-K** | 16 / 14 | Korean version of RRTMG with updates. Similar performance. |
-| 99 / 99 | **GFDL** | — | From NOAA's hurricane model. Optimized for tropical cyclones. |
+| BouLac (8) | Revised MM5 (1) or Eta (2) |
 
 ### For Indonesia
 
-**Use RRTMG (4/4)** — it's the standard, it's accurate, and it handles the interaction between tropical clouds and radiation well.
+**Best bet:** MYNN-EDMF (5). Indonesia is mostly ocean and coastline. MYNN handles marine boundary layers, sea breeze circulations, and low-level clouds much better than YSU. The built-in shallow convection component is a bonus — you don't need a separate shallow cumulus scheme.
 
-**Radiation call frequency (`radt`):** Set this approximately equal to your grid spacing in km. For dx = 10 km, use `radt = 10` (minutes). **Never exceed 30 minutes** — tropical radiation changes quickly with cloud development.
+**Also fine:** YSU (1) if your domain is land-dominated (e.g., just Java) or if you want to match the Tropical Suite.
 
-### Why Radiation Matters for the Tropics
-
-Indonesia sits near the equator where solar radiation is intense year-round (~340 W/m² average at the top of atmosphere). Clouds play a huge role:
-- **High cirrus clouds** (from deep convection) trap longwave radiation → warming
-- **Low stratocumulus** reflects shortwave → cooling
-- Getting the balance right is critical for the surface energy budget and convective triggering
+**For mountainous domains:** BouLac (8) — the terrain-aware mixing length is relevant for Java's volcanoes or Papua's central highlands.
 
 ---
 
-## 8. Other Options
+## 5. Surface Layer (`sf_sfclay_physics`)
 
-### Shallow Cumulus (`shcu_physics`)
+This handles the lowest ~10–100 m — the thin layer right above the ground or ocean surface. It calculates how efficiently heat, moisture, and momentum move between the surface and the atmosphere (the "exchange coefficients"). All schemes are based on Monin-Obukhov similarity theory.
 
-Separate scheme for shallow (fair-weather, non-raining) cumulus clouds. Most PBL schemes already handle shallow convection internally, so you usually **don't need this**.
+Honestly, you mostly just pick whatever matches your PBL scheme (see pairing table above). But a few things worth noting:
 
-| Value | When to Use |
-|---|---|
-| 0 | Default — let PBL or deep cumulus scheme handle it |
-| -1 | Let the deep cumulus scheme handle shallow convection too |
-| 2 | UW scheme — for marine stratocumulus research |
-| 5 | Deng (MYNN-based) — specifically for solar energy forecasting |
+| # | Name | Notes |
+|---|---|---|
+| 1 | **Revised MM5** | Standard choice. Pairs with YSU. Includes a viscous sub-layer. Good all-around. |
+| 2 | **Eta Similarity** | Pairs with MYJ. Janjic's version. More conservative (lower fluxes in strong instability). |
+| 5 | **MYNN** | Pairs with MYNN PBL. Better roughness length formulation over water — uses Charnock + viscous sub-layer. **Better over ocean/coast.** If your domain is mostly water (which for Indonesia it often is), this matters. |
+| 7 | **Pleim-Xiu** | Pairs with ACM2. Air quality stuff. |
+| 91 | **Old MM5** | Legacy. No viscous sub-layer. Don't use this for new work — it's only still there for backwards compatibility. (Annoyingly, the Tropical Suite uses this one. I'd override it.) |
 
-### Ocean Mixed Layer (`sf_ocean_physics`)
-
-Simple ocean models that let SST respond to the atmosphere — useful for tropical cyclone studies.
-
-| Value | Description |
-|---|---|
-| 0 | Fixed SST (default) — fine for short runs or over land |
-| 1 | Simple 1D mixed-layer ocean — SST cools under storms |
-| 2 | 3D Price-Weller-Pinkel — more realistic ocean response |
-
-**For TC studies over Indonesian seas:** Use **1 or 2** for runs > 48 hours.
-
-### Gravity Wave Drag (`gwd_opt`)
-
-Mountains create waves in the atmosphere that slow down the wind at upper levels. This effect is important at coarse resolution where mountains aren't well-resolved.
-
-| dx | Recommendation |
-|---|---|
-| > 20 km | Turn ON (`gwd_opt = 1`) |
-| 10–20 km | Consider if you have mountains |
-| < 10 km | OFF — terrain is resolved |
-
-### Urban Canopy (`sf_urban_physics`)
-
-For studying city weather (heat islands, urban flooding). Only activate if your study focuses on cities like Jakarta, Surabaya, or Medan.
-
-| Value | Use Case |
-|---|---|
-| 0 | No urban physics (default) |
-| 1 | Single-layer UCM — good starting point for urban studies |
-| 2 | BEP — multi-layer, more detailed (requires MYJ or BouLac PBL) |
-| 3 | BEP+BEM — includes indoor air conditioning effects |
+**For tropical cyclones:** Set `isftcflx = 1` to modify exchange coefficients at high wind speeds (> 30 m/s). It reduces drag and increases enthalpy flux, which lets simulated TCs get stronger — closer to reality.
 
 ---
 
-## 9. Recommended Configurations for Indonesia
+## 6. Land Surface (`sf_surface_physics`)
 
-### Configuration 1: Quick Student Run (dx > 10 km)
+This is everything happening at the ground: soil temperature, soil moisture, evapotranspiration, snow, and the surface energy budget. It provides the lower boundary condition for the atmosphere.
 
-The simplest setup that gives reasonable results for Indonesia. Good for learning and class assignments.
+| # | Name | Soil Layers | What to know |
+|---|---|---|---|
+| 1 | 5-layer Thermal Diffusion | 5 | Just diffuses heat through the soil. No vegetation, no soil moisture evolution, no evapotranspiration. Honestly, it's barely a land surface model. Only for debugging or idealized runs. |
+| 2 | **Noah** | 4 | The standard. Soil temp + moisture, snowpack, canopy water, evapotranspiration via Penman. Used operationally at NCEP. Part of the Tropical Suite. Does the job. |
+| 3 | RUC | 6–9 | More soil layers, multi-layer snow. Designed for mid-latitude winter weather. Not really tuned for the tropics. |
+| 4 | **Noah-MP** | 4 | The upgraded Noah. Key difference: it has a **separate vegetation canopy** — plants are treated as a layer above the soil, not just a property of the surface. This means it can do canopy interception (rain hitting leaves before reaching the ground), stomatal conductance, dynamic LAI, and even a groundwater table. **This matters a lot for Indonesian tropical forests** where canopy interception alone can account for 10–30% of total rainfall. |
+| 5 | CLM4 | 10 | Community Land Model v4. Ten soil layers, five snow layers, photosynthesis-driven stomatal conductance, plant functional types. Most sophisticated but also most expensive. Climate-scale runs. |
+| 7 | Pleim-Xiu | 2 | Two layers. For EPA air quality. Pairs with ACM2. |
+| 8 | SSiB | 3 | Simplified Simple Biosphere. Detailed vegetation biophysics with just 3 soil layers. Shows up in some tropical studies. |
 
+### For Indonesia
+
+**Quick runs / operational:** Noah (2). It works.
+
+**Research, especially over forested areas:** Noah-MP (4). Over Kalimantan, Sumatra, and Papua, the land surface is a moisture pump for the atmosphere. Dense tropical forest transpires heavily and intercepts a lot of rain. Noah-MP's separate canopy layer handles this properly. You'll get better local convective initiation and more realistic surface energy partitioning.
+
+---
+
+## 7. Radiation (`ra_lw_physics` / `ra_sw_physics`)
+
+Shortwave (SW) = incoming solar. Longwave (LW) = thermal emission from Earth and atmosphere. These schemes control the heating/cooling profile of the atmosphere and the surface energy budget.
+
+In the tropics, clouds play a huge role: thick high cirrus from deep convection traps outgoing longwave (warming), while low-level stratocumulus reflects incoming solar (cooling). The radiation scheme needs to get cloud-radiation interactions right.
+
+| # (LW/SW) | Name | Bands | Notes |
+|---|---|---|---|
+| 1 / 1 | RRTM / Dudhia | 16 / 1 | LW is fine (correlated-k, 16 bands). SW is just one broadband calculation — fast but misses some spectral detail. OK for coarse, quick runs. |
+| 4 / 4 | **RRTMG / RRTMG** | 16 / 14 | The standard. Multi-band for both LW and SW. McICA (Monte Carlo Independent Column Approximation) handles sub-grid cloud variability. Supports aerosol-radiation interaction. **Use this unless you have a specific reason not to.** Part of the Tropical Suite. |
+| 5 / 5 | New Goddard | 10 / 11 | NASA scheme. Good for tropical cloud-radiation studies. Slightly more expensive than RRTMG. |
+| 7 / 7 | Fu-Liou-Gu | — | More spectral detail. Research-grade. Good if you're studying aerosol-radiation interaction specifically. |
+| 14 / 14 | RRTMG-K | 16 / 14 | Korean update of RRTMG. Similar performance. |
+| 99 / 99 | GFDL | — | From NOAA's hurricane model (HWRF). Tuned for tropical cyclone simulations. |
+
+**Radiation call interval (`radt`):** Set it roughly equal to your dx in km. For a 10 km domain, use `radt = 10` (minutes). Don't exceed 30 min — tropical cloud fields evolve quickly.
+
+**Just use RRTMG (4/4).** Seriously. Unless you're doing specialized radiation research or TC work with GFDL, RRTMG is the right answer.
+
+---
+
+## 8. Other Stuff Worth Knowing
+
+### Shallow cumulus (`shcu_physics`)
+
+Most PBL schemes (especially MYNN) already handle shallow convection internally. You generally don't need a separate shallow cumulus scheme unless you're doing solar energy forecasting (`shcu_physics = 5`, Deng scheme, pairs with MYNN).
+
+### Ocean mixed layer (`sf_ocean_physics`)
+
+For runs > 48 hours over ocean, especially TC studies: set `sf_ocean_physics = 1` (simple 1D mixed layer) or `2` (3D Price-Weller-Pinkel). This lets SST cool in response to storm-driven mixing — important for TC intensity. For short runs or over land, leave it at 0.
+
+### Gravity wave drag (`gwd_opt`)
+
+Mountains generate gravity waves that propagate upward and deposit momentum, slowing upper-level winds. At coarse resolution (dx > 20 km), sub-grid mountains have real unresolved drag — turn it on (`gwd_opt = 1`). Below 10 km, terrain is generally resolved well enough. Off by default.
+
+### Urban canopy (`sf_urban_physics`)
+
+Only relevant if you're studying Jakarta's heat island, Surabaya's urban flooding, etc. Options 2 (BEP) and 3 (BEP+BEM) are multi-layer and require MYJ or BouLac PBL. Option 1 (single-layer UCM) works with any PBL scheme. Use WUDAPT LCZ data for better urban land use classification.
+
+---
+
+## 9. Configs I'd Use for Indonesia
+
+### The lazy-but-decent option (dx > 10 km)
+
+Just use the NCAR Tropical Suite:
 ```
-! === NCAR Tropical Suite (just set this one line!) ===
 &physics
  physics_suite = 'tropical',
 /
-
-! This automatically sets:
-!   mp_physics         = 6      (WSM6)
-!   cu_physics         = 16     (New Tiedtke)
-!   ra_lw_physics      = 4      (RRTMG)
-!   ra_sw_physics      = 4      (RRTMG)
-!   bl_pbl_physics     = 1      (YSU)
-!   sf_sfclay_physics  = 91     (Old MM5)
-!   sf_surface_physics = 2      (Noah)
 ```
+It works. Not optimal, but you'll get reasonable results without thinking too hard.
 
-### Configuration 2: Better Tropical Maritime (dx > 10 km)
+### My preferred setup (dx > 10 km)
 
-Improved over the Tropical Suite for Indonesia's maritime environment:
-
+Upgraded for maritime environment:
 ```
 &physics
- mp_physics         = 8,       ! Thompson — better rain DSD
- cu_physics         = 16,      ! New Tiedtke — good tropical trigger
+ mp_physics         = 8,       ! Thompson
+ cu_physics         = 16,      ! New Tiedtke
  ra_lw_physics      = 4,       ! RRTMG
  ra_sw_physics      = 4,       ! RRTMG
- bl_pbl_physics     = 5,       ! MYNN-EDMF — better for maritime
- sf_sfclay_physics  = 5,       ! MYNN — better over ocean
- sf_surface_physics = 4,       ! Noah-MP — better vegetation
- radt               = 10,      ! Radiation interval (minutes)
- sst_update         = 1,       ! Time-varying SST (for runs > 48h)
+ bl_pbl_physics     = 5,       ! MYNN — better for ocean/coast
+ sf_sfclay_physics  = 5,       ! MYNN sfc layer (must match PBL)
+ sf_surface_physics = 4,       ! Noah-MP — better for tropical forest
+ radt               = 10,
+ sst_update         = 1,       ! if running > 48h over ocean
 /
 ```
 
-**Why this is better:**
-- MYNN PBL + MYNN surface layer handles the ocean-atmosphere interface better than YSU
-- Thompson microphysics gives more realistic rain rates
-- Noah-MP handles Indonesian tropical forests better
+Why each choice:
+- MYNN over YSU because most of Indonesia is coastal/maritime
+- Thompson over WSM6 because double-moment rain is better for tropical convection
+- Noah-MP over Noah because Indonesian tropical forest canopy interception matters
+- New Tiedtke because moisture-convergence trigger works for maritime convection
 
-### Configuration 3: Convection-Permitting (dx < 4 km)
-
-For high-resolution studies of individual thunderstorms, mesoscale convective systems, or city-scale weather:
+### Convection-permitting (dx < 4 km)
 
 ```
 &physics
- mp_physics         = 10,      ! Morrison — double-moment, research standard
- cu_physics         = 0,       ! OFF — convection is resolved!
+ mp_physics         = 10,      ! Morrison 2-moment
+ cu_physics         = 0,       ! OFF. Non-negotiable at this resolution.
  ra_lw_physics      = 4,       ! RRTMG
  ra_sw_physics      = 4,       ! RRTMG
- bl_pbl_physics     = 5,       ! MYNN-EDMF
+ bl_pbl_physics     = 5,       ! MYNN
  sf_sfclay_physics  = 5,       ! MYNN
  sf_surface_physics = 4,       ! Noah-MP
- radt               = 3,       ! Match grid spacing in km
+ radt               = 3,       ! ~ dx in km
 /
 ```
 
-### Configuration 4: Multi-Nest (27 km → 9 km → 3 km)
+### Multi-nest (27 km / 9 km / 3 km)
 
-Common setup for going from synoptic scale down to storm-resolving:
-
+This is the typical setup for going from synoptic-scale down to storm-resolving:
 ```
 &physics
- mp_physics         = 8,  8,  8,       ! Thompson (same on all domains)
- cu_physics         = 16, 3,  0,       ! Tiedtke on d01, Grell-Freitas on d02, OFF on d03
- ra_lw_physics      = 4,  4,  4,       ! RRTMG
- ra_sw_physics      = 4,  4,  4,       ! RRTMG
- bl_pbl_physics     = 5,  5,  5,       ! MYNN
- sf_sfclay_physics  = 5,  5,  5,       ! MYNN
- sf_surface_physics = 4,  4,  4,       ! Noah-MP
- radt               = 27, 9,  3,       ! Match dx in km per domain
+ mp_physics         = 8,  8,  8,      ! same micro on all domains
+ cu_physics         = 16, 3,  0,      ! Tiedtke → GF (scale-aware) → OFF
+ ra_lw_physics      = 4,  4,  4,
+ ra_sw_physics      = 4,  4,  4,
+ bl_pbl_physics     = 5,  5,  5,
+ sf_sfclay_physics  = 5,  5,  5,
+ sf_surface_physics = 4,  4,  4,
+ radt               = 27, 9,  3,
 /
 ```
 
-**Key point:** Domain 2 (9 km) is in the "grey zone" — using **Grell-Freitas (3)** is the best choice here because it's scale-aware and smoothly transitions between parameterized and explicit convection.
+The 9 km domain (d02) is in the grey zone — that's why we use Grell-Freitas there. It's scale-aware, so it'll gradually reduce its contribution as convection becomes resolved. Much smoother than hard-switching from "on" to "off."
 
-### Configuration 5: Tropical Cyclone over Indonesian Seas
+### Tropical cyclone setup
 
 ```
 &physics
- mp_physics         = 8,  8,           ! Thompson
- cu_physics         = 3,  0,           ! GF on outer, OFF on inner
- ra_lw_physics      = 4,  4,           ! RRTMG
- ra_sw_physics      = 4,  4,           ! RRTMG
- bl_pbl_physics     = 1,  1,           ! YSU
- sf_sfclay_physics  = 1,  1,           ! Revised MM5
- sf_surface_physics = 2,  2,           ! Noah
- sf_ocean_physics   = 1,              ! Mixed-layer ocean for SST feedback
- isftcflx           = 1,              ! Modified exchange for high winds
- sst_update         = 1,              ! Time-varying SST
+ mp_physics         = 8,  8,
+ cu_physics         = 3,  0,          ! GF on outer, off on inner
+ ra_lw_physics      = 4,  4,
+ ra_sw_physics      = 4,  4,
+ bl_pbl_physics     = 1,  1,          ! YSU (traditional for TCs)
+ sf_sfclay_physics  = 1,  1,
+ sf_surface_physics = 2,  2,          ! Noah is fine
+ sf_ocean_physics   = 1,              ! SST feedback from mixed-layer ocean
+ isftcflx           = 1,              ! high-wind exchange coefficient fix
+ sst_update         = 1,
 /
 ```
 
 ---
 
-## 10. The NSF NCAR Tropical Suite
+## 10. The NCAR Tropical Suite (Shortcut)
 
-WRF provides a pre-defined physics combination optimized for tropical applications. Instead of setting each scheme individually, you can use one line:
+Setting `physics_suite = 'tropical'` in the namelist automatically configures:
 
-```
-&physics
- physics_suite = 'tropical',
-/
-```
-
-This sets:
-
-| Parameter | Value | Scheme |
+| Param | Value | Scheme |
 |---|---|---|
-| `mp_physics` | 6 | WSM6 |
-| `cu_physics` | 16 | New Tiedtke |
-| `ra_lw_physics` | 4 | RRTMG |
-| `ra_sw_physics` | 4 | RRTMG |
-| `bl_pbl_physics` | 1 | YSU |
-| `sf_sfclay_physics` | 91 | Old MM5 |
-| `sf_surface_physics` | 2 | Noah |
+| mp_physics | 6 | WSM6 |
+| cu_physics | 16 | New Tiedtke |
+| ra_lw_physics | 4 | RRTMG |
+| ra_sw_physics | 4 | RRTMG |
+| bl_pbl_physics | 1 | YSU |
+| sf_sfclay_physics | 91 | Old MM5 |
+| sf_surface_physics | 2 | Noah |
 
-**Strengths:**
-- Tested and validated for tropical applications
-- Good starting point — you can always override individual schemes
-- New Tiedtke cumulus handles tropical moisture convergence well
+It's a reasonable starting point, but I have some gripes with it for Indonesia:
 
-**Limitations for Indonesia specifically:**
-- Uses Old MM5 surface layer (91) — Revised MM5 (1) or MYNN (5) is better
-- WSM6 is single-moment — for better rain rates, upgrade to Thompson (8) or WDM6 (16)
-- YSU PBL is land-focused — MYNN is better for maritime domains
-- Noah LSM lacks the vegetation canopy detail of Noah-MP for tropical forests
+- It uses Old MM5 surface layer (91). This is the legacy version without viscous sub-layer. At minimum, override to Revised MM5 (1), or better yet, switch to MYNN (5).
+- WSM6 is fine but single-moment. Thompson or WDM6 would give better tropical rainfall.
+- YSU is land-oriented. MYNN is just better for maritime domains.
+- Noah is solid but lacks the separate vegetation canopy that matters for tropical forests. Noah-MP is the upgrade.
 
-**How to override:** Just add the specific parameter you want to change:
+You can override individual settings by adding them explicitly:
 ```
 &physics
  physics_suite      = 'tropical',
- sf_sfclay_physics  = 1,        ! Override Old MM5 → Revised MM5
- bl_pbl_physics     = 5,        ! Override YSU → MYNN
- sf_sfclay_physics  = 5,        ! Must match PBL
+ bl_pbl_physics     = 5,       ! override YSU → MYNN
+ sf_sfclay_physics  = 5,       ! must match
+ mp_physics         = 8,       ! override WSM6 → Thompson
+ sf_surface_physics = 4,       ! override Noah → Noah-MP
 /
 ```
 
 ---
 
-## 11. Common Mistakes Students Make
+## 11. Mistakes I've Seen (and Made)
 
-### Mistake 1: Leaving Cumulus ON at High Resolution
+### Leaving cumulus on at high resolution
+
+This is the #1 mistake. Your domain is 3 km and you forgot to turn off `cu_physics`. Rainfall is 3x too high and looks nothing like observations. The fix is obvious but easy to overlook, especially when you copy a namelist from a coarser run.
+
 ```
-! WRONG — dx = 3 km with cumulus ON
-cu_physics = 1,    ! Double-counts convection → way too much rain!
-
-! CORRECT
-cu_physics = 0,    ! Let the model resolve thunderstorms itself
+! 3 km domain — cu_physics MUST be 0
+cu_physics = 0,
 ```
 
-### Mistake 2: Mismatched PBL and Surface Layer
-```
-! WRONG — MYNN PBL with MM5 surface layer
-bl_pbl_physics    = 5,    ! MYNN
-sf_sfclay_physics = 1,    ! Revised MM5 ← WRONG! Needs 5
+### Mismatching PBL and surface layer
 
-! CORRECT
-bl_pbl_physics    = 5,    ! MYNN
+The model won't crash. It'll just give you wrong surface fluxes, wrong 2-m temperatures, wrong 10-m winds, and you'll spend weeks wondering why your verification scores are bad.
+
+```
+! WRONG
+bl_pbl_physics    = 5,    ! MYNN PBL
+sf_sfclay_physics = 1,    ! but MM5 surface layer???
+
+! RIGHT
+bl_pbl_physics    = 5,    ! MYNN PBL
 sf_sfclay_physics = 5,    ! MYNN surface layer
 ```
 
-### Mistake 3: Not Changing Physics Between Domains
-Using the same cumulus scheme for all domains in a nested run:
-```
-! WRONG — cu_physics = 1 on a 3 km nest
-cu_physics = 1, 1, 1,     ! KF on all domains, including the 3 km one
+### Same cumulus scheme on all nested domains
 
-! CORRECT — turn off cumulus on the convection-permitting domain
-cu_physics = 1, 3, 0,     ! KF at coarse, GF (scale-aware) in grey zone, OFF at fine
-```
+If you're running 27 km / 9 km / 3 km and you have `cu_physics = 1, 1, 1` — that's KF on the 3 km domain. Bad. Worse, even the 9 km domain is in the grey zone and shouldn't be using a non-scale-aware scheme.
 
-### Mistake 4: Radiation Interval Too Large
 ```
-! WRONG — dx = 5 km but radt = 30
-radt = 30,        ! Only updates radiation every 30 min → misses cloud changes
+! WRONG
+cu_physics = 1, 1, 1,
 
-! CORRECT
-radt = 5,         ! Match grid spacing in km
+! BETTER
+cu_physics = 16, 3, 0,   ! Tiedtke, Grell-Freitas (scale-aware), off
 ```
 
-### Mistake 5: No SST Update for Long Runs
-For runs > 48 hours over ocean (very relevant for Indonesia!), static SST becomes increasingly wrong:
+### Radiation interval too large
+
+`radt = 30` on a 5 km domain means radiation is updated only every 30 minutes. Tropical clouds can form, intensify, and dissipate faster than that. Set `radt` roughly equal to dx in km.
+
+### No SST update on long runs over ocean
+
+Default WRF uses a static SST from initialization. After 2–3 days over warm tropical ocean, that initial SST becomes stale. For Indonesia (mostly ocean!), enable SST update:
+
 ```
 &physics
  sst_update = 1,
@@ -541,75 +441,66 @@ For runs > 48 hours over ocean (very relevant for Indonesia!), static SST become
 /
 ```
 
-### Mistake 6: Using 5-Layer Thermal Diffusion for Real Simulations
-```
-! WRONG — 5-layer has no soil moisture, no vegetation
-sf_surface_physics = 1,
+### Using the 5-layer thermal diffusion LSM for real cases
 
-! CORRECT — use at least Noah
-sf_surface_physics = 2,    ! Noah (operational standard)
-```
+`sf_surface_physics = 1` has no soil moisture, no vegetation, no evapotranspiration. It's not a real land surface model. Use Noah (2) at minimum.
 
 ---
 
-## 12. How to Choose: A Decision Flowchart
+## 12. Quick Decision Guide
 
 ```
-START: What is your grid spacing?
-│
-├── dx > 10 km (coarse)
-│   ├── Microphysics: WSM6 (6) or Thompson (8)
-│   ├── Cumulus: New Tiedtke (16) or KF (1)
-│   ├── PBL: YSU (1) or MYNN (5)
-│   ├── Radiation: RRTMG (4/4)
-│   ├── LSM: Noah (2) or Noah-MP (4)
-│   └── GWD: ON (1) if dx > 20 km
-│
-├── dx = 4–10 km (grey zone)
-│   ├── Microphysics: Thompson (8) or Morrison (10)
-│   ├── Cumulus: Grell-Freitas (3) ← SCALE-AWARE!
-│   ├── PBL: MYNN (5)
-│   ├── Radiation: RRTMG (4/4)
-│   └── LSM: Noah-MP (4)
-│
-└── dx < 4 km (convection-permitting)
-    ├── Microphysics: Morrison (10) or Thompson (8)
-    ├── Cumulus: OFF (0) ← CRITICAL!
-    ├── PBL: MYNN (5)
-    ├── Radiation: RRTMG (4/4)
-    └── LSM: Noah-MP (4)
+What's your grid spacing?
 
-Special considerations:
-├── Over ocean? → Use MYNN PBL + MYNN surface layer
-├── Tropical cyclone? → Add sf_ocean_physics=1, isftcflx=1
-├── Urban study? → Add sf_urban_physics=1 (or 2/3 with MYJ PBL)
-├── Air quality? → Use ACM2 PBL + Pleim-Xiu surface layer + LSM
-├── Solar energy? → Add shcu_physics=5, Thompson Aerosol (28)
-└── Indonesia specifically? → Prefer MYNN, New Tiedtke, Thompson/Morrison
+dx > 10 km
+  Microphysics:  WSM6 (6) or Thompson (8)
+  Cumulus:       New Tiedtke (16) or KF (1)
+  PBL:           YSU (1) or MYNN (5)
+  Radiation:     RRTMG (4/4)
+  Land surface:  Noah (2) or Noah-MP (4)
+  GWD:           on (1) if dx > 20 km
+
+dx 4–10 km (grey zone)
+  Microphysics:  Thompson (8) or Morrison (10)
+  Cumulus:       Grell-Freitas (3) — scale-aware
+  PBL:           MYNN (5)
+  Radiation:     RRTMG (4/4)
+  Land surface:  Noah-MP (4)
+
+dx < 4 km
+  Microphysics:  Morrison (10) or Thompson (8)
+  Cumulus:       OFF (0)
+  PBL:           MYNN (5)
+  Radiation:     RRTMG (4/4)
+  Land surface:  Noah-MP (4)
+
+Modifiers:
+  Ocean domain?       → MYNN PBL + MYNN surface layer
+  Tropical cyclone?   → sf_ocean_physics=1, isftcflx=1
+  Urban study?        → sf_urban_physics=1 (or 2/3 with MYJ PBL)
+  Air quality?        → ACM2 PBL + Pleim-Xiu
+  Solar forecasting?  → shcu_physics=5, Thompson Aerosol (28)
 ```
 
----
+### Cheat sheet
 
-## Quick Reference Card
-
-| Category | Namelist | Student Default | Better for Indonesia | Research Grade |
+| Category | Namelist var | Student | Better for Indonesia | Research |
 |---|---|---|---|---|
-| **Microphysics** | `mp_physics` | WSM6 (6) | Thompson (8) | Morrison (10) |
-| **Cumulus** | `cu_physics` | New Tiedtke (16) | New Tiedtke (16) or GF (3) | GF (3) or OFF |
-| **PBL** | `bl_pbl_physics` | YSU (1) | MYNN (5) | MYNN (5) |
-| **Surface Layer** | `sf_sfclay_physics` | Revised MM5 (1) | MYNN (5) | MYNN (5) |
-| **Land Surface** | `sf_surface_physics` | Noah (2) | Noah-MP (4) | Noah-MP (4) |
-| **LW Radiation** | `ra_lw_physics` | RRTMG (4) | RRTMG (4) | RRTMG (4) |
-| **SW Radiation** | `ra_sw_physics` | RRTMG (4) | RRTMG (4) | RRTMG (4) |
+| Microphysics | `mp_physics` | WSM6 (6) | Thompson (8) | Morrison (10) |
+| Cumulus | `cu_physics` | New Tiedtke (16) | New Tiedtke (16) or GF (3) | GF (3) or off |
+| PBL | `bl_pbl_physics` | YSU (1) | MYNN (5) | MYNN (5) |
+| Surface layer | `sf_sfclay_physics` | Rev. MM5 (1) | MYNN (5) | MYNN (5) |
+| Land surface | `sf_surface_physics` | Noah (2) | Noah-MP (4) | Noah-MP (4) |
+| LW radiation | `ra_lw_physics` | RRTMG (4) | RRTMG (4) | RRTMG (4) |
+| SW radiation | `ra_sw_physics` | RRTMG (4) | RRTMG (4) | RRTMG (4) |
 
 ---
 
 ## References
 
-- [WRF Physics Options References (NCAR)](https://www2.mmm.ucar.edu/wrf/users/physics/phys_references.html)
-- [WRF Physics Documentation](https://www2.mmm.ucar.edu/wrf/users/wrf_users_guide/build/html/physics.html)
-- [WRF Namelist Best Practices](https://www2.mmm.ucar.edu/wrf/site/namelist.input_best_practices.html)
-- [WRF Tropical Physics Suite](https://www2.mmm.ucar.edu/wrf/users/wrf_users_guide/build/html/physics.html)
-- [BMKG WRF Parameterization Test for Extreme Rainfall (JMG)](https://jmg.bmkg.go.id/jmg/index.php/jmg/article/view/924)
-- [Sensitivity of Water Cycle over Maritime Continent (Ulate et al. 2014)](https://ui.adsabs.harvard.edu/abs/2014JAMES...6.1095U/abstract)
-- [ResearchGate: Best WRF Schemes for the Tropics](https://www.researchgate.net/post/Which_combination_of_schemes_in_WRF_ARW_is_the_best_for_the_tropics)
+- [WRF Physics References (NCAR)](https://www2.mmm.ucar.edu/wrf/users/physics/phys_references.html)
+- [WRF Physics User Guide](https://www2.mmm.ucar.edu/wrf/users/wrf_users_guide/build/html/physics.html)
+- [Namelist Best Practices](https://www2.mmm.ucar.edu/wrf/site/namelist.input_best_practices.html)
+- [BMKG WRF Parameterization Test — Extreme Rainfall (JMG BMKG)](https://jmg.bmkg.go.id/jmg/index.php/jmg/article/view/924)
+- [Ulate et al. 2014 — Water Cycle Sensitivity over IO and Maritime Continent](https://ui.adsabs.harvard.edu/abs/2014JAMES...6.1095U/abstract)
+- [ResearchGate discussion — Best WRF Schemes for Tropics](https://www.researchgate.net/post/Which_combination_of_schemes_in_WRF_ARW_is_the_best_for_the_tropics)
