@@ -451,6 +451,16 @@ Default WRF uses a static SST from initialization. After 2–3 days over warm tr
 
 ![WRF Parameterization Quick Guide for Indonesia](wrf-parameterization-quickguide.png)
 
+### Why These Schemes?
+
+![Why These Microphysics?](wrf-param-why-microphysics.png)
+
+![Why These Cumulus?](wrf-param-why-cumulus.png)
+
+![Why These PBL & Surface Layer?](wrf-param-why-pbl.png)
+
+![Why These Land Surface & Radiation?](wrf-param-why-landsfc-rad.png)
+
 ```
 What's your grid spacing?
 
