@@ -27,6 +27,15 @@
 18. [Running a Test Case (Inlet_test)](#18-running-a-test-case-inlet_test)
 19. [SWAN Boundary File Preparation](#19-swan-boundary-file-preparation)
 20. [Nesting in COAWST](#20-nesting-in-coawst)
+21. [WRF Setup in COAWST (8-Step Workflow)](#21-wrf-setup-in-coawst-8-step-workflow)
+22. [WRF Map Projections](#22-wrf-map-projections)
+23. [WaveWatch III in COAWST](#23-wavewatch-iii-in-coawst)
+24. [ROMS Build System & External Libraries](#24-roms-build-system--external-libraries)
+25. [Parallel I/O (PIO)](#25-parallel-io-pio)
+26. [Vegetation Module](#26-vegetation-module)
+27. [InWave (Infragravity Waves)](#27-inwave-infragravity-waves)
+28. [Biology & Biogeochemistry](#28-biology--biogeochemistry)
+29. [COAWST MATLAB Tools Reference](#29-coawst-matlab-tools-reference)
 
 ---
 
@@ -2156,6 +2165,1001 @@ Coupling: WRF d02 ↔ both ROMS grids ↔ both SWAN grids
 - **Coupling interval**: Use the same coupling interval for all grids, or match each to its time step.
 - **SCRIP weights**: Must include all grid pairs. The weight file grows with the number of grids.
 - **Debugging**: Test each model's nesting independently (ROMS-only, SWAN-only) before coupling.
+
+---
+
+## 21. WRF Setup in COAWST (8-Step Workflow)
+
+> Based on COAWST 2021 Training Day 1 — WRF Setup and Configuration (John Warner, Maitane Olabarrieta)
+
+### Overview
+
+WRF (Weather Research and Forecasting) is the atmospheric component of COAWST. Setting up WRF follows an 8-step workflow using the WRF Preprocessing System (WPS) and the WRF model itself.
+
+### The 8-Step Workflow
+
+```
+Step 1: Define domain (namelist.wps)
+Step 2: geogrid.exe → Static terrain/land-use data
+Step 3: Download met data (GFS/ERA5/NARR)
+Step 4: ungrib.exe → Extract met fields from GRIB
+Step 5: metgrid.exe → Interpolate to WRF grid
+Step 6: real.exe → Create wrfinput_d01, wrfbdy_d01
+Step 7: wrf.exe → Run WRF standalone (test)
+Step 8: Couple with COAWST
+```
+
+### Step 1: Define Domain (`namelist.wps`)
+
+Key parameters in `&share` and `&geogrid` sections:
+
+```
+&share
+  max_dom = 2,                    ! number of domains
+  start_date = '2019-09-01_00:00:00', '2019-09-01_00:00:00',
+  end_date   = '2019-09-05_00:00:00', '2019-09-05_00:00:00',
+  interval_seconds = 21600        ! input data interval (6h = GFS)
+/
+
+&geogrid
+  parent_id         = 1, 1,
+  parent_grid_ratio = 1, 3,       ! refinement ratio
+  i_parent_start    = 1, 31,      ! child start position in parent (i)
+  j_parent_start    = 1, 17,      ! child start position in parent (j)
+  e_we          = 74, 112,        ! grid points in x (west-east)
+  e_sn          = 61, 97,         ! grid points in y (south-north)
+  dx = 27000,                     ! parent grid spacing (meters)
+  dy = 27000,
+  map_proj = 'mercator',          ! projection
+  ref_lat  = 30.0,                ! center latitude
+  ref_lon  = -80.0,               ! center longitude
+  truelat1 = 30.0,                ! true latitude 1
+  geog_data_res = 'default', 'default',
+  geog_data_path = '/path/to/WPS_GEOG/'
+/
+```
+
+**Grid spacing rules:**
+- Parent `dx`/`dy` in meters
+- Child grid spacing = parent / `parent_grid_ratio`
+- Child grid dimensions must satisfy: `(e_we_child - 1)` must be divisible by `parent_grid_ratio`
+
+### Step 2: Run `geogrid.exe`
+
+Generates static geographic data files (`geo_em.d01.nc`, `geo_em.d02.nc`):
+- Terrain height (HGT_M)
+- Land use categories (LU_INDEX)
+- Soil types, vegetation fraction, albedo
+- Land mask (LANDMASK)
+
+```bash
+./geogrid.exe >& geogrid.log
+# Verify: check for "Successful completion of geogrid"
+ncdump -h geo_em.d01.nc   # inspect output
+```
+
+### Step 3: Download Meteorological Data
+
+Common sources:
+| Source | Resolution | Interval | Use Case |
+|--------|-----------|----------|----------|
+| GFS | 0.25° | 6h (3h available) | Operational forecasting |
+| ERA5 | 0.25° | 1h | Reanalysis, hindcast |
+| NARR | 32 km | 3h | North America regional |
+| FNL | 1° | 6h | Historical cases |
+
+Download in GRIB2 format. GFS from NCEP NOMADS, ERA5 from Copernicus CDS.
+
+### Step 4: Run `ungrib.exe`
+
+Extracts meteorological fields from GRIB files:
+
+```bash
+# Link GRIB files
+./link_grib.csh /path/to/gfs_files/gfs*
+
+# Link the appropriate Vtable
+ln -sf ungrib/Variable_Tables/Vtable.GFS Vtable
+
+# Run ungrib
+./ungrib.exe >& ungrib.log
+# Output: FILE:YYYY-MM-DD_HH intermediate files
+```
+
+**Vtable** maps GRIB fields to WPS intermediate format. Different Vtables for GFS, ERA5, NARR, etc.
+
+### Step 5: Run `metgrid.exe`
+
+Horizontally interpolates meteorological data onto WRF grid:
+
+```bash
+./metgrid.exe >& metgrid.log
+# Output: met_em.d01.YYYY-MM-DD_HH:00:00.nc (one per time step per domain)
+```
+
+### Step 6: Run `real.exe`
+
+Vertical interpolation + boundary/initial condition generation:
+
+```bash
+# Set namelist.input for real.exe
+# Key: num_metgrid_levels must match met_em files
+mpirun -np 1 ./real.exe
+# Output: wrfinput_d01, wrfinput_d02, wrfbdy_d01
+```
+
+Key `namelist.input` settings:
+```
+&domains
+  time_step = 120,               ! main time step (seconds), ~6*dx(km)
+  e_vert = 45, 45,               ! vertical levels (same for all domains)
+  num_metgrid_levels = 34,       ! from met_em files
+  eta_levels = 1.000, 0.9975, ... 0.000   ! optional explicit levels
+/
+```
+
+### Step 7: Run WRF Standalone (Test)
+
+```bash
+mpirun -np 4 ./wrf.exe
+# Output: wrfout_d01_YYYY-MM-DD_HH:00:00
+# Verify: check rsl.error.0000 for completion message
+```
+
+### Step 8: Couple with COAWST
+
+When running in COAWST:
+- WRF is compiled as part of the COAWST build system
+- `wrfinput_d0X` and `wrfbdy_d01` are still needed
+- WRF exchanges fields with ROMS/SWAN via MCT/ESMF coupler
+- Set `NnodesATM` in `coupling_coawst.in` for processor allocation
+
+### Moving Nests in WRF
+
+WRF supports **vortex-following moving nests** for hurricane tracking:
+
+```
+&domains
+  num_moves = -99,               ! automatic vortex tracking
+  move_id   = 2,                 ! which domain moves
+  move_interval = 15,            ! check interval (minutes)
+  move_cd_x = 0, 1,              ! movement flags
+  move_cd_y = 0, 1,
+/
+```
+
+- The child domain automatically follows the storm center
+- Useful for hurricane/typhoon simulations
+- Moving nest in COAWST: ROMS/SWAN grids remain fixed, only WRF nest moves
+
+---
+
+## 22. WRF Map Projections
+
+> Based on COAWST 2021 Training Day 1 — Map Projections for WRF
+
+### Available Projections
+
+WRF supports four map projections set via `map_proj` in `namelist.wps`:
+
+| Projection | `map_proj` | Best For | Key Parameters |
+|------------|-----------|----------|----------------|
+| **Lambert Conformal Conic** | `'lambert'` | Mid-latitudes | `truelat1`, `truelat2` |
+| **Mercator** | `'mercator'` | Tropics, equatorial regions | `truelat1` |
+| **Polar Stereographic** | `'polar'` | Polar regions | `truelat1` |
+| **Lat-Lon (Cylindrical Equidistant)** | `'lat-lon'` | Global or large tropical domains | None special |
+
+### Lambert Conformal Conic
+
+- **Standard for mid-latitude applications** (30°-60° N/S)
+- Conformal: preserves angles and local shapes
+- Two true latitudes where scale is exact
+- Distortion increases away from true latitudes
+
+```
+map_proj = 'lambert',
+truelat1 = 30.0,        ! first true latitude
+truelat2 = 60.0,        ! second true latitude
+stand_lon = -98.0,       ! standard longitude (center meridian)
+ref_lat = 40.0,
+ref_lon = -98.0,
+```
+
+### Mercator
+
+- **Best for tropical/equatorial domains** (within ±30°)
+- Conformal projection
+- Constant grid spacing along parallels
+- Scale distortion increases toward poles
+- **Recommended for Indonesian/tropical COAWST applications**
+
+```
+map_proj = 'mercator',
+truelat1 = 0.0,         ! true latitude (equator for minimal distortion)
+ref_lat = -6.0,
+ref_lon = 106.0,
+```
+
+### Polar Stereographic
+
+- **Best for high-latitude/polar domains**
+- Conformal at the pole
+- True scale at one latitude
+
+```
+map_proj = 'polar',
+truelat1 = 60.0,        ! true latitude
+ref_lat = 90.0,
+ref_lon = 0.0,
+```
+
+### Lat-Lon (Cylindrical Equidistant)
+
+- **For global or very large domains**
+- Grid spacing in degrees, not meters
+- `dx`/`dy` specified in degrees
+- Not conformal — significant shape distortion away from equator
+
+```
+map_proj = 'lat-lon',
+dx = 0.25,              ! grid spacing in degrees
+dy = 0.25,
+ref_lat = 0.0,
+ref_lon = 180.0,
+```
+
+### Choosing the Right Projection
+
+```
+Latitude of domain center:
+  |
+  ├── > 60° → Polar Stereographic
+  ├── 30°-60° → Lambert Conformal
+  ├── < 30° → Mercator
+  └── Global/very large → Lat-Lon
+```
+
+**For Indonesia/Sunda Strait:** Use **Mercator** with `truelat1` near the equator.
+
+---
+
+## 23. WaveWatch III in COAWST
+
+> Based on COAWST 2021 Training Day 3 — WaveWatch III (Maitane Olabarrieta)
+
+### Overview
+
+WaveWatch III (WW3) is an alternative wave model to SWAN in COAWST. Developed by NOAA/NCEP, it's designed for **regional to global scale** wave modeling.
+
+**SWAN vs WW3:**
+| Feature | SWAN | WW3 |
+|---------|------|-----|
+| Scale | Nearshore/coastal | Regional/global |
+| Grid | Structured | Structured + unstructured |
+| Physics | Depth-limited, triads | Deep water, global |
+| Coupling | Well-tested in COAWST | Available since COAWST v3.4+ |
+| Best for | Small coastal domains | Large open-ocean domains |
+
+### WW3 Switch File
+
+WW3 uses a **switch file** to configure compile-time options (similar to ROMS CPP flags):
+
+```
+F90 NOGRB DIST MPI PR3 UQ FLX0 LN1 ST4 STAB0 NL1 BT1 DB1 MLIM
+TR0 BS0 IC0 IS0 REF0 XX0 WNT1 WNX1 RWND CRT1 CRN1 O0 O1 O2 O3
+O4 O5 O6 O7 O14 O15
+```
+
+Key switches:
+| Switch | Description |
+|--------|-------------|
+| `ST4` | Source term package (Ardhuin et al. 2010) |
+| `NL1` | DIA nonlinear interactions |
+| `BT1` | JONSWAP bottom friction |
+| `DIST MPI` | Distributed memory parallel |
+| `PR3` | 3rd-order propagation |
+| `FLX0` | Flux computation (default) |
+| `LN1` | Linear input (Cavaleri & Malanotte-Rizzoli) |
+| `MLIM` | Miche-style depth limiting |
+
+### WW3 Grid Creation
+
+```bash
+# 1. Define grid in ww3_grid.inp
+#    - Spatial grid (resolution, extent)
+#    - Spectral grid (frequencies, directions)
+#    - Bathymetry
+#    - Time steps
+
+# 2. Run grid preprocessor
+ww3_grid
+# Output: mod_def.ww3 (model definition file)
+```
+
+Spectral grid settings:
+```
+# Frequency range and number of bins
+  0.0345  1.10  32        ! f_low, f_ratio, n_freq
+# Direction: 36 bins = 10° resolution
+  36   0.0                 ! n_dir, first_dir
+```
+
+### WW3 Preprocessors (4 Required)
+
+```
+1. ww3_grid  → mod_def.ww3      (grid/spectral definition)
+2. ww3_strt  → restart.ww3      (initial conditions)
+3. ww3_bound → nest.ww3         (boundary spectra, if nested)
+4. ww3_prnc  → wind.ww3         (wind forcing input)
+```
+
+**`ww3_prnc`** converts NetCDF wind fields to WW3 format:
+```
+# ww3_prnc.inp example
+'WND' 'T' 'T'                    ! field type, time interp, space interp
+ 0. 0. 0. 0.                     ! time offset
+'wind_forcing.nc'                 ! input file
+'longitude' 'latitude' 'uwnd' 'vwnd'  ! variable names
+```
+
+### Coupling WW3 with COAWST
+
+In the COAWST header file (`.h`):
+```c
+#define WW3_MODEL          /* Use WW3 instead of SWAN */
+#undef  SWAN_MODEL         /* Disable SWAN */
+#define MCT_LIB            /* MCT coupling */
+```
+
+In `coupling_coawst.in`:
+```
+NnodesWAV = 16             ! processors for WW3
+WAV_model = WW3            ! specify WW3
+```
+
+**Key difference from SWAN coupling:**
+- WW3 provides wave parameters (Hs, Tp, Dir, Tm) to ROMS
+- ROMS provides currents and water levels to WW3
+- WRF provides 10m winds to WW3
+- WW3 can provide wave-dependent roughness to WRF
+
+### Running WW3 in COAWST
+
+```bash
+# 1. Prepare WW3 inputs (grid, restart, boundary, wind)
+# 2. Set switches and compile COAWST with WW3_MODEL defined
+# 3. Configure coupling_coawst.in
+# 4. Run as usual:
+mpirun -np 64 coawstM coupling_coawst.in
+```
+
+---
+
+## 24. ROMS Build System & External Libraries
+
+> Based on COAWST 2021 Training Day 2 — ROMS Build System (Hernan Arango)
+
+### COAWST/ROMS Build System
+
+The COAWST build uses a shell script (`build_coawst.sh`) that configures compilers, paths, and flags before invoking `make`.
+
+### `build_coawst.sh` Key Variables
+
+```bash
+# Application
+export   COAWST_APPLICATION=INLET_TEST    # Your application name
+export   MY_HEADER_DIR=${MY_ROOT_DIR}/Projects/Inlet_test
+
+# Compiler
+export   FORT=ifort          # ifort, gfortran, pgi
+export   USE_MPI=on          # Enable MPI
+export   USE_MPIF90=on       # Use mpif90 wrapper
+
+# Parallel options
+export   USE_OpenMP=          # Leave blank to disable
+export   USE_LARGE=on         # >2GB files (64-bit offsets)
+export   USE_NETCDF4=on       # NetCDF-4/HDF5 support
+
+# Paths
+export   MY_ROOT_DIR=/home/user/COAWST
+export   NETCDF_INCDIR=/usr/local/include
+export   NETCDF_LIBDIR=/usr/local/lib
+```
+
+### External Libraries
+
+COAWST depends on several external libraries, managed in `Lib/` directory:
+
+| Library | Purpose | Required? |
+|---------|---------|-----------|
+| **NetCDF-C + NetCDF-Fortran** | I/O for all model components | Yes |
+| **MCT** | Model Coupling Toolkit (coupler) | Yes (if coupling) |
+| **ARPACK** | Eigenvalue solver for 4D-Var, adjoint, tangent linear | Only for data assimilation |
+| **ESMF/NUOPC** | Alternative coupling framework | Optional (instead of MCT) |
+| **PIO/SCORPIO** | Parallel I/O library | Optional (for large runs) |
+| **HDF5** | Hierarchical Data Format (used by NetCDF-4) | Yes (if USE_NETCDF4=on) |
+
+### MCT Build
+
+MCT is built as part of the COAWST compilation:
+
+```bash
+cd Lib/MCT
+./configure FC=ifort CC=icc --prefix=/path/to/install
+make
+make install
+```
+
+### ARPACK Build
+
+Only needed for ROMS data assimilation modes (4D-Var, adjoint):
+
+```bash
+cd Lib/ARPACK
+# Edit ARmake.inc: set FC, FFLAGS, ARPACKLIB path
+make lib       # builds libarpack.a
+```
+
+### Compilation Flow
+
+```
+build_coawst.sh
+  ├── Set environment variables
+  ├── Source compiler-specific makefile (Linux-ifort.mk, etc.)
+  ├── Build MCT (if coupled)
+  ├── Build ARPACK (if 4D-Var)
+  ├── Build PIO (if enabled)
+  ├── Preprocess CPP flags from header file (.h)
+  └── make -j N coawstM
+       ├── Compile ROMS modules
+       ├── Compile SWAN/WW3 (if enabled)
+       ├── Compile WRF (if enabled)
+       └── Link → coawstM executable
+```
+
+### Compiler-Specific Notes
+
+| Compiler | Makefile | Notes |
+|----------|----------|-------|
+| Intel `ifort` | `Linux-ifort.mk` | Recommended, best performance |
+| GNU `gfortran` | `Linux-gfortran.mk` | Free, widely available |
+| PGI/NVIDIA `pgf90` | `Linux-pgi.mk` | GPU support possible |
+
+### Common Build Issues
+
+- **NetCDF not found**: Ensure `NETCDF_INCDIR` and `NETCDF_LIBDIR` point to correct paths. Check `nc-config --includedir` and `nc-config --libdir`.
+- **MPI errors**: Make sure `mpif90 --version` works and matches the Fortran compiler.
+- **MCT build fails**: Often a compiler mismatch. MCT must be built with the same Fortran compiler as COAWST.
+- **Undefined symbols at link**: Usually missing libraries. Check `-L` paths and `-l` flags in the makefile.
+
+---
+
+## 25. Parallel I/O (PIO)
+
+> Based on COAWST 2021 Training Day 2 — Parallel I/O (Hernan Arango)
+
+### Why Parallel I/O?
+
+Standard ROMS I/O has a bottleneck: **only the master processor** reads/writes NetCDF files. All other processors send/receive data to/from the master via MPI. For large grids and many processors, this becomes a severe performance limitation.
+
+**PIO** (Parallel I/O) allows multiple processors to read/write simultaneously, dramatically improving I/O performance for large simulations.
+
+### I/O Strategies in ROMS
+
+ROMS supports 4 I/O strategies:
+
+| Strategy | CPP Flag | Description |
+|----------|----------|-------------|
+| **Serial** | (default) | Master PE does all I/O |
+| **PIO (Parallel I/O)** | `PIO_LIB` | Multiple I/O PEs via PIO library |
+| **SCORPIO** | `SCORPIO_LIB` | Successor to PIO, better async |
+| **Parallel NetCDF** | `PARALLEL_IO` | Direct parallel NetCDF-4 (HDF5) |
+
+### PIO Configuration in `roms.in`
+
+```
+! I/O strategy
+   Nway = 4          ! Number of I/O processors
+   IOrec = 0         ! I/O record (0 = auto)
+
+! PIO-specific
+   PIO_NUMTASKS = 4           ! I/O processor count
+   PIO_STRIDE = 16            ! Stride between I/O PEs
+   PIO_BASE = 0               ! First I/O PE rank
+   PIO_TYPENAME = "pnetcdf"   ! pnetcdf or netcdf4p
+   PIO_REARRANGER = "box"     ! box or subset
+```
+
+### Synchronous vs Asynchronous I/O
+
+- **Synchronous**: I/O PEs are compute PEs that pause to do I/O → simpler but computation stalls during writes
+- **Asynchronous**: Dedicated I/O PEs that only handle I/O → better overlap but uses extra processors
+
+```
+Synchronous:   [Compute + I/O] [Compute + I/O] [Compute + I/O] ...
+Asynchronous:  [Compute PEs] → hand off → [Dedicated I/O PEs]
+```
+
+### When to Use PIO
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Small grid (<500×500), few PEs (<32) | Standard serial I/O |
+| Medium grid, 32-128 PEs | Consider PIO with 4 I/O PEs |
+| Large grid (>1000×1000), >128 PEs | PIO or SCORPIO strongly recommended |
+| High-frequency output | PIO + async for minimal compute impact |
+
+### Build with PIO
+
+```bash
+# In build_coawst.sh:
+export USE_PIO=on
+export PIO_INCDIR=/path/to/pio/include
+export PIO_LIBDIR=/path/to/pio/lib
+
+# In header file:
+#define PIO_LIB
+```
+
+---
+
+## 26. Vegetation Module
+
+> Based on COAWST 2021 Training Day 4 — Vegetation (Tarandeep Kalra)
+
+### Overview
+
+The COAWST vegetation module simulates the effects of **submerged aquatic vegetation (SAV)** and **marsh vegetation** on hydrodynamics, waves, and sediment transport.
+
+### Vegetation Effects
+
+```
+Vegetation influences:
+  ├── Hydrodynamics
+  │   ├── Drag force on currents (reduces flow velocity)
+  │   ├── Turbulence modification (TKE production + dissipation)
+  │   └── Flexible plant bending (effective height reduction)
+  ├── Waves
+  │   ├── Wave energy dissipation (Mendez & Losada 2004)
+  │   └── Wave thrust on plants
+  └── Sediment
+      ├── Reduced bed shear stress under canopy
+      ├── Enhanced settling in vegetation patches
+      └── Modified erosion/deposition patterns
+```
+
+### CPP Options
+
+```c
+/* Vegetation master switches */
+#define VEG_DRAG          /* Vegetation drag on currents */
+#define VEG_FLEX          /* Flexible vegetation (bending) */
+#define VEG_TURB          /* Vegetation-enhanced turbulence */
+#define VEG_SWAN_COUPLING /* Wave-vegetation coupling via SWAN */
+#define VEG_STREAMING     /* Wave streaming effect */
+
+/* Marsh dynamics */
+#define MARSH_DYNAMICS    /* Lateral marsh erosion/accretion */
+#define MARSH_SED_EROSION /* Sediment-marsh interaction */
+#define MARSH_WAVE_THRUST /* Wave thrust on marsh edge */
+#define MARSH_TIDAL_RANGE /* Tidal range control on marsh */
+```
+
+### Vegetation Input (`vegetation.in`)
+
+```
+! Number of vegetation types
+  NVEG = 1
+
+! Vegetation properties per type (can vary spatially)
+  VEG_DENS = 500.0       ! stem density (stems/m²)
+  VEG_HGHT = 0.3         ! stem height (m)
+  VEG_DIAM = 0.006       ! stem diameter (m)
+  VEG_CD   = 1.0         ! drag coefficient (dimensionless)
+  VEG_FLEX_MODULUS = 0.5  ! Young's modulus for flexibility (GPa)
+  VEG_THICK = 0.001      ! blade thickness (m) — for flex
+```
+
+### Drag Force Formulation
+
+Vegetation drag is modeled as a body force in the momentum equations:
+
+```
+F_drag = -0.5 * Cd * a * |u| * u
+
+Where:
+  Cd = drag coefficient (typically 1.0-1.5)
+  a  = frontal area per unit volume = N * d * h_eff / h
+  N  = stem density (stems/m²)
+  d  = stem diameter (m)
+  h_eff = effective vegetation height (after bending)
+  |u| = current speed magnitude
+```
+
+### Flexible Vegetation
+
+When `VEG_FLEX` is defined, plants bend under combined current and wave forcing:
+
+```
+Effective height: h_eff = h * f(Ca)
+  Where Ca = Cauchy number = ρ * Cd * a * u² * h³ / (E * I)
+  E = Young's modulus
+  I = second moment of area
+
+Large Ca → plant bends flat → small effective height
+Small Ca → plant stands upright → full height
+```
+
+### Wave-Vegetation Coupling (SWAN)
+
+With `VEG_SWAN_COUPLING`, ROMS sends vegetation properties to SWAN:
+- SWAN calculates wave dissipation by vegetation using Mendez & Losada (2004)
+- Dissipation depends on stem density, diameter, height, and drag coefficient
+- SWAN returns reduced wave energy to ROMS
+
+### Marsh Dynamics
+
+`MARSH_DYNAMICS` enables lateral marsh erosion and accretion:
+
+```
+Marsh erosion rate:
+  dB/dt = -Be * (P_wave / L_marsh)
+
+Where:
+  Be = marsh erodibility coefficient
+  P_wave = wave power at marsh edge
+  L_marsh = marsh width
+
+Marsh accretion:
+  Vertical accretion from sediment deposition during inundation
+  Controlled by tidal range and sediment supply
+```
+
+### Example: SAV in an Estuary
+
+```c
+/* Header file for SAV application */
+#define VEG_DRAG
+#define VEG_FLEX
+#define VEG_TURB
+#define VEG_SWAN_COUPLING
+#define SEDIMENT
+```
+
+```
+! vegetation.in
+NVEG = 2
+! Type 1: Seagrass (Zostera marina)
+  VEG_DENS(1) = 800.0    ! dense meadow
+  VEG_HGHT(1) = 0.4
+  VEG_DIAM(1) = 0.005
+  VEG_CD(1)   = 1.2
+! Type 2: Kelp (Macrocystis)
+  VEG_DENS(2) = 10.0     ! sparse canopy
+  VEG_HGHT(2) = 5.0
+  VEG_DIAM(2) = 0.03
+  VEG_CD(2)   = 1.5
+```
+
+---
+
+## 27. InWave (Infragravity Waves)
+
+> Based on COAWST 2021 Training Day 4 — InWave (Maitane Olabarrieta)
+
+### Overview
+
+**InWave** is an infragravity (IG) wave driver within COAWST that resolves low-frequency wave motions (periods 25s–300s) generated by the nonlinear interaction of short-wave groups.
+
+### Why InWave?
+
+Standard wave models (SWAN, WW3) are **phase-averaged** — they don't resolve individual waves. This misses:
+- **Infragravity waves** (25-300s period) from wave group forcing
+- **Wave runup** on beaches
+- **Harbor resonance** at IG frequencies
+- **Surf beat** and edge waves
+
+InWave fills this gap using a **phase-averaged approach for IG waves** (not phase-resolving like Boussinesq models), making it computationally efficient.
+
+### InWave Physics
+
+```
+InWave solves:
+  ├── Wave action conservation (for IG band)
+  ├── Radiation stress from short waves (via SWAN)
+  │   └── Short-wave group envelope → IG wave forcing
+  ├── IG wave propagation (refraction, shoaling)
+  └── IG wave dissipation (breaking, bottom friction)
+```
+
+The short-wave envelope (from SWAN) forces IG wave generation through:
+1. **Bound IG waves**: Phase-locked to wave groups (shoaling amplification)
+2. **Free IG waves**: Released at the breakpoint, propagate independently
+3. **Edge waves**: Trapped along the coast by refraction
+
+### CPP Options
+
+```c
+#define INWAVE_MODEL       /* Master InWave switch */
+#define INWAVE_SWAN_COUPLING  /* Get short-wave forcing from SWAN */
+
+/* InWave physics options */
+#define INWAVE_ROLLER      /* Surface roller model */
+#define INWAVE_BOTTOM_FRICTION  /* Bottom friction for IG waves */
+#define INWAVE_BREAKING    /* IG wave breaking */
+```
+
+### InWave Input Configuration
+
+In `inwave.in`:
+```
+! Spectral discretization for IG band
+  IG_NFREQ = 10           ! number of IG frequency bins
+  IG_FMIN  = 0.004        ! min IG frequency (Hz) = 250s period
+  IG_FMAX  = 0.04         ! max IG frequency (Hz) = 25s period
+  IG_NDIR  = 36           ! directional bins
+
+! Breaking parameters
+  IG_GAMMA = 0.5          ! breaking ratio for IG waves
+  IG_ALPHA = 1.0          ! breaking dissipation coefficient
+```
+
+### Coupling with SWAN and ROMS
+
+```
+SWAN → short-wave spectra → InWave (IG generation)
+                                 ↓
+                            IG wave spectra
+                                 ↓
+                         IG radiation stresses → ROMS (currents, setup)
+                                 ↓
+                         ROMS → water levels, currents → InWave (refraction)
+```
+
+### When to Use InWave
+
+| Application | Use InWave? |
+|-------------|------------|
+| Open ocean wave forecasting | No — use SWAN/WW3 |
+| Coastal engineering (breakwaters, harbors) | Yes — IG resonance matters |
+| Beach morphology & runup | Yes — IG drives swash |
+| Storm surge with wave setup | Maybe — if IG contribution significant |
+| Coral reef hydrodynamics | Yes — IG dominates inside lagoon |
+
+---
+
+## 28. Biology & Biogeochemistry
+
+> Based on COAWST 2021 Training Day 4 — Biology (Neil Ganju, Tarandeep Kalra)
+
+### Overview
+
+ROMS includes multiple biogeochemical (BGC) modules that can be activated through CPP flags. These range from simple nutrient-phytoplankton models to complex multi-element cycles.
+
+### Available Biology Modules
+
+| Module | CPP Flag | Tracers | Description |
+|--------|----------|---------|-------------|
+| **Fennel** | `BIO_FENNEL` | 7+ | N-based, 1 phyto, 1 zoo (most popular) |
+| **NPZD (Powell)** | `NPZD_POWELL` | 4 | Simple N-P-Z-D |
+| **NPZD (Franks)** | `NPZD_FRANKS` | 4 | Alternative NPZD |
+| **EcoSim** | `ECOSIM` | 30+ | Multi-species ecosystem |
+| **Bio-Sediment** | `BEST_NPZ` | 15+ | Bering Sea specific |
+| **Estuarine** | `ESTUARINE_BGC` | varies | Estuarine biogeochemistry |
+| **Red Tide** | `RED_TIDE` | varies | Harmful algal bloom |
+| **Hypoxia** | `HYPOXIA_SRM` | varies | Dissolved oxygen |
+| **Carbon** | `CARBON` | +2 | Add-on: DIC + alkalinity |
+| **Oxygen** | `OXYGEN` | +1 | Add-on: dissolved O₂ |
+| **PCB** | `PCB_BATHY` | varies | Contaminant tracking |
+| **Reef Ecosys.** | `REEF_ECOSYS` | varies | Coral reef ecosystem |
+
+### Fennel Model (Most Common)
+
+The Fennel et al. (2006) model is the most widely used ROMS biology module:
+
+```
+State Variables:
+  NO₃  - Nitrate
+  NH₄  - Ammonium
+  Phyt - Phytoplankton (chlorophyll-based)
+  Zoo  - Zooplankton
+  LDet - Large detritus (sinking)
+  SDet - Small detritus (suspended)
+  Oxy  - Dissolved oxygen (if OXYGEN defined)
+  DIC  - Dissolved inorganic carbon (if CARBON defined)
+  Alk  - Alkalinity (if CARBON defined)
+```
+
+```
+Flow diagram:
+  NO₃ → Phyto → Zoo → LDet → NH₄ → NO₃ (nitrification)
+         ↓        ↓      ↓
+        SDet    SDet   sinking
+         ↓        ↓
+        NH₄     NH₄ (remineralization)
+```
+
+### CPP Options for Biology
+
+```c
+/* Master biology switch */
+#define BIO_FENNEL         /* Fennel nitrogen-based model */
+
+/* Additional components */
+#define CARBON             /* Add DIC + alkalinity tracers */
+#define OXYGEN             /* Add dissolved oxygen tracer */
+#define DENITRIFICATION    /* Include denitrification process */
+#define BIO_SEDIMENT       /* Biology-sediment coupling */
+#define DIAGNOSTICS_BIO    /* Output biological diagnostics */
+
+/* Light */
+#define SHORTWAVE          /* Shortwave radiation penetration */
+#define ANA_SPFLUX         /* Analytical surface tracer flux */
+#define ANA_BPFLUX         /* Analytical bottom tracer flux */
+```
+
+### Biology Input (`bio_Fennel.in`)
+
+```
+! Light parameters
+  AttSW = 0.04        ! seawater light attenuation (1/m)
+  AttChl = 0.024      ! chlorophyll light attenuation (1/(mg Chl m²))
+  PARfrac = 0.43      ! fraction of shortwave that is PAR
+
+! Phytoplankton
+  Vp0 = 1.5           ! max growth rate at 0°C (1/day)
+  I_thNH4 = 1.5       ! NH4 inhibition of NO3 uptake (mmol/m³)
+  D_p5NH4 = 0.1       ! half-saturation for NH4 uptake (mmol/m³)
+  D_p5NO3 = 0.5       ! half-saturation for NO3 uptake (mmol/m³)
+
+! Zooplankton
+  ZooGR = 0.6         ! grazing rate (1/day)
+  ZooEEN = 0.3        ! excretion efficiency
+  ZooEED = 0.2        ! egestion efficiency
+
+! Remineralization
+  LDeRRN = 0.01       ! large detritus remineralization (1/day)
+  SDeRRN = 0.03       ! small detritus remineralization (1/day)
+  CoagR = 0.005       ! coagulation rate (1/day m³/mmol N)
+```
+
+### HydroBioSed Coupling
+
+When biology and sediment are both active, **HydroBioSed** coupling allows:
+- Organic matter settling and burial in sediment
+- Nutrient release from sediment to water column
+- Sediment-mediated denitrification
+- Resuspension of buried organic material
+
+```c
+#define BIO_FENNEL
+#define SEDIMENT
+#define BIO_SEDIMENT        /* Enable coupling */
+```
+
+### Tips for Running Biology
+
+1. **Start simple**: Get the physics right first (no biology), then add biology
+2. **Initial conditions**: Biology needs realistic initial nutrient/chlorophyll profiles (from WOA, GLORYS-BGC, etc.)
+3. **Spin-up**: Biology needs longer spin-up than physics (months to years for deep ocean)
+4. **Diagnostics**: Always enable `DIAGNOSTICS_BIO` to track biological rates
+5. **Time step**: Biology uses the same time step as ROMS — if biology is unstable, reduce `DT`
+
+---
+
+## 29. COAWST MATLAB Tools Reference
+
+> Based on COAWST 2021 Training Day 4 — Tools and Cloud Access
+
+### Overview
+
+COAWST includes MATLAB tools in the `Tools/` directory for pre-processing, grid generation, and post-processing. Additionally, the community is moving toward **Python (Pangeo)** workflows.
+
+### MATLAB Grid Tools (`Tools/mfiles/`)
+
+| Tool | Purpose |
+|------|---------|
+| `create_roms_grid.m` | Interactive ROMS grid generation |
+| `create_swan_grid.m` | Generate SWAN grid from ROMS grid |
+| `create_scrip_weights.m` | Generate SCRIP interpolation weights |
+| `add_bathy.m` | Add bathymetry to ROMS grid |
+| `add_mask.m` | Edit land/sea mask interactively |
+| `coawst_explorer.m` | GUI for exploring COAWST output |
+
+### COAWST Explorer
+
+A MATLAB GUI for visualizing COAWST output:
+
+```matlab
+% Launch the explorer
+coawst_explorer
+
+% Features:
+% - Load multiple NetCDF output files (ROMS, SWAN, WRF)
+% - 2D/3D visualization of any variable
+% - Time animation
+% - Cross-section plots
+% - Vector overlay (currents, winds)
+% - Difference plots (two runs)
+```
+
+### Python/Pangeo Alternatives
+
+The COAWST community increasingly uses Python tools:
+
+| Python Tool | Replaces MATLAB... | Purpose |
+|-------------|-------------------|---------|
+| `xarray` | NetCDF MATLAB tools | Read/analyze NetCDF output |
+| `xgcm` | Grid-aware analysis | Grid-aware computations (ROMS C-grid) |
+| `xroms` | ROMS MATLAB tools | ROMS-specific xarray extensions |
+| `cartopy` | m_map | Map projections and coastlines |
+| `holoviews`/`hvplot` | Visualization | Interactive visualization |
+| `dask` | N/A | Parallel/out-of-core computation |
+| `pyroms` | ROMS MATLAB tools | ROMS grid gen + pre/post-processing |
+| `gridgen-c` | create_roms_grid | Grid generation (C library) |
+
+### Cloud Access for COAWST
+
+Running COAWST on cloud platforms:
+
+```
+Cloud workflow:
+  1. Launch compute instance (AWS EC2, Google Cloud, Azure)
+  2. Install dependencies (compilers, MPI, NetCDF, HDF5)
+  3. Clone COAWST
+  4. Compile and run
+  5. Analyze output via Jupyter
+```
+
+**Jupyter Remote Access:**
+```bash
+# On remote server:
+jupyter lab --no-browser --port=8888
+
+# On local machine (SSH tunnel):
+ssh -N -L 8888:localhost:8888 user@remote-server
+
+# Open in browser: http://localhost:8888
+```
+
+### Key Data Analysis Patterns (Python)
+
+```python
+import xarray as xr
+
+# Open ROMS output
+ds = xr.open_dataset('ocean_his.nc')
+
+# Plot sea surface temperature
+ds.temp.isel(s_rho=-1, ocean_time=0).plot()
+
+# Time series at a point
+ds.temp.isel(s_rho=-1, eta_rho=50, xi_rho=80).plot()
+
+# Cross-section
+ds.temp.isel(ocean_time=0, xi_rho=80).plot(x='eta_rho', y='s_rho')
+
+# Compute depth-averaged current
+import xroms
+ds_roms = xroms.open_netcdf('ocean_his.nc')
+u_avg = ds_roms.u.mean(dim='s_rho')
+```
+
+### Pre-Processing Checklist
+
+```
+□ Grid: create_roms_grid.m or pyroms
+  □ Bathymetry smoothed (rx0 < 0.35)
+  □ Land mask edited
+  □ Minimum depth set (h_min = 5m typical)
+□ SCRIP weights generated (for coupling)
+□ Initial conditions: from GLORYS, HYCOM, or analytical
+□ Boundary conditions: from same source, time-varying
+□ Forcing files: atmospheric (ERA5/GFS), tidal (TPXO/FES)
+□ SWAN grid + bottom + boundary
+□ WRF inputs (wrfinput, wrfbdy) via WPS
+□ All grids registered in coupling_coawst.in
+```
 
 ---
 
