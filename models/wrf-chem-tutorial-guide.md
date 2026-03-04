@@ -579,3 +579,5 @@ Each channel needs corresponding `io_form_auxinputN = 2` (NetCDF) and `auxinputN
 - [WRF-Chem User Guide (NOAA)](https://ruc.noaa.gov/wrf/wrf-chem/Users_guide.pdf)
 - [Prep-Chem-Sources Documentation](https://ruc.noaa.gov/wrf/wrf-chem/Emission_guide.pdf)
 - [WRF-Chem Emissions Guide](https://ruc.noaa.gov/wrf/wrf-chem/)
+- [WRFCHEM-TOOLS-MOSIT](https://github.com/HathewayWill/WRFCHEM-TOOLS-MOSIT) — automated installer for WRF-Chem preprocessing tools (Mozbc, MEGAN Bio Emiss, ANTHRO EMIS, EDGAR HTAP, EPA ANTHRO EMIS, UBC, Aircraft, FINN, Wes Coldens). Builds all required libraries (zlib, MPICH, HDF5, NetCDF, etc.) from source. Supports GNU/Intel compilers on Linux, macOS, and WSL.
+- [WRF-MOSIT](https://github.com/HathewayWill/WRF-MOSIT) — automated end-to-end WRF installer that includes WRF-Chem as an installation option. Hatheway et al. (2023), *Earth Science Informatics*, [doi:10.1007/s12145-023-01136-y](https://doi.org/10.1007/s12145-023-01136-y).

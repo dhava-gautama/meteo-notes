@@ -359,6 +359,8 @@ Models exchange physical fields via MCT at user-specified intervals. **SCRIP** i
 | HDF5 | Required by NetCDF-4 |
 | MCT | Included in `Lib/MCT/`, compiled as part of build |
 
+> **Automated alternative:** [WRF-MOSIT](https://github.com/HathewayWill/WRF-MOSIT) can install COAWST (with all libraries, WRF, ROMS, and SWAN) automatically on Linux and WSL using GNU or Intel compilers. macOS is not supported for the COAWST option.
+
 ### Step 1: Compile MCT (one-time)
 
 ```bash

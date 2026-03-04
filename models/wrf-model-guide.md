@@ -1944,7 +1944,15 @@ export PATH=$DIR/bin:$PATH
 export LD_LIBRARY_PATH=$DIR/lib:$LD_LIBRARY_PATH
 ```
 
-> **Shortcut:** On Ubuntu/Debian, `sudo apt install libnetcdf-dev libnetcdff-dev libhdf5-dev libpng-dev libjasper-dev mpich` installs all dependencies. On CentOS/RHEL, use EPEL + `yum`. On HPC systems, use `module load` for pre-built libraries. Only build from source if system packages are missing or compiler-mismatched.
+> **Shortcut — system packages:** On Ubuntu/Debian, `sudo apt install libnetcdf-dev libnetcdff-dev libhdf5-dev libpng-dev libjasper-dev mpich` installs all dependencies. On CentOS/RHEL, use EPEL + `yum`. On HPC systems, use `module load` for pre-built libraries. Only build from source if system packages are missing or compiler-mismatched.
+
+> **Shortcut — WRF-MOSIT automated installer:** [WRF-MOSIT](https://github.com/HathewayWill/WRF-MOSIT) is a BASH script that automates the entire WRF installation — libraries, WRF v4.7.1, WPS v4.6.0, WRF-DA, plus post-processing tools (MET v12.1.1, METplus v6.1.0, WRF-Python, GrADS, NCL, CDO). Supports GNU and Intel compilers on Ubuntu/Debian, CentOS/Rocky, macOS, and WSL. It also installs WRF-Chem, WRF-Hydro, WRF-CMAQ, WRF-SFIRE, and COAWST variants. Requires ~350 GB free disk space and takes 60–120 min at 10 Mbps. Citation: Hatheway et al. (2023), *Earth Science Informatics*, [doi:10.1007/s12145-023-01136-y](https://doi.org/10.1007/s12145-023-01136-y).
+>
+> ```bash
+> git clone https://github.com/HathewayWill/WRF-MOSIT.git
+> cd WRF-MOSIT && chmod 775 *.sh
+> ./WRF-MOSIT.sh 2>&1 | tee WRF_MOSIT.log
+> ```
 
 ### Environment Variables
 

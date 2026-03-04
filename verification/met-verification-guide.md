@@ -156,7 +156,19 @@ ${TEST_BASE}/bin/met_config_info
 ${TEST_BASE}/bin/point_stat --version
 ```
 
-### 2.2 Docker
+### 2.2 DTC-MOSIT Automated Installer
+
+[DTC-MOSIT](https://github.com/HathewayWill/DTC-MOSIT) is a BASH script that automates compilation of MET v12.2.0 and METplus v6.2.0 (including all dependency libraries) on 64-bit systems. Supports Ubuntu/Debian, CentOS/Rocky, macOS, and WSL. Takes 10–30 min at 10 Mbps.
+
+```bash
+git clone https://github.com/HathewayWill/DTC-MOSIT.git
+cd DTC-MOSIT && chmod 775 *.sh
+./DTC-MOSIT.sh 2>&1 | tee DTC_MOSIT.log
+```
+
+> DTC-MOSIT is particularly useful on systems where Docker/Singularity is unavailable and you want to avoid manually compiling GSL, BUFRLIB, G2CLIB, and the other MET prerequisites.
+
+### 2.3 Docker
 
 The simplest way to get started — no compilation required.
 
@@ -182,7 +194,7 @@ docker run -it --rm \
     dtcenter/metplus:6.0.0 /bin/bash
 ```
 
-### 2.3 Singularity / Apptainer (HPC)
+### 2.4 Singularity / Apptainer (HPC)
 
 Most HPC clusters don't allow Docker. Use Singularity (now Apptainer) instead.
 
@@ -209,7 +221,7 @@ singularity exec --bind /scratch met_12.0.0.sif \
     grid_stat /scratch/fcst.grb2 /scratch/obs.nc /scratch/GridStatConfig
 ```
 
-### 2.4 METplus Installation (Python)
+### 2.5 METplus Installation (Python)
 
 ```bash
 # Clone METplus
@@ -241,7 +253,7 @@ MET_INSTALL_DIR = /opt/met
 LOG_LEVEL = DEBUG
 ```
 
-### 2.5 Environment Verification Checklist
+### 2.6 Environment Verification Checklist
 
 ```bash
 # Check MET tools are accessible
