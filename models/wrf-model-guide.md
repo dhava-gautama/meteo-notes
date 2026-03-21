@@ -2019,6 +2019,210 @@ tail rsl.out.0000        # Should show SUCCESS COMPLETE WRF
 
 > **v4.7 download note:** When downloading from GitHub, use the `v4.7.x.tar.gz` file — NOT the auto-generated "Source Code" archive, which misses required submodules (NoahMP, MYNN-EDMF, MMM-physics).
 
+### Compilation Optimization
+
+After `./configure` generates `configure.wrf`, you can edit it to tune compiler flags before running `./compile`. This directly affects the **runtime speed** of `wrf.exe` and `real.exe`.
+
+#### Understanding `configure.wrf`
+
+Key variables in `configure.wrf`:
+
+| Variable | Purpose |
+|---|---|
+| `FCOPTIM` | Fortran optimization flags (applied to most source files) |
+| `FCBASEOPTS` | Base Fortran flags (always applied) |
+| `CFLAGS_LOCAL` | C compiler optimization flags |
+| `FCNOOPT` | Flags for files that must compile without optimization (numerical sensitivity) |
+| `FCDEBUG` | Debug flags (empty by default; populate for debugging builds) |
+| `OMP` | OpenMP flags (auto-set for smpar/dm+sm) |
+| `ARCH_LOCAL` | Architecture-specific preprocessor defines |
+| `LDFLAGS_LOCAL` | Linker flags |
+| `J` | Parallel make jobs (e.g., `-j 8`) |
+
+#### Compiler Flag Recommendations
+
+**GNU (gfortran/gcc):**
+
+```bash
+# Default from configure (conservative):
+FCOPTIM = -O2
+
+# Recommended for production (safe, ~15-30% faster):
+FCOPTIM = -O3 -ftree-vectorize -funroll-loops -fallow-argument-mismatch
+
+# Aggressive (test thoroughly — occasionally changes results at roundoff level):
+FCOPTIM = -O3 -march=native -mtune=native -ftree-vectorize -funroll-loops \
+          -ffast-math -fno-math-errno -fallow-argument-mismatch
+# WARNING: -ffast-math breaks IEEE compliance; some physics schemes
+# (especially microphysics) may produce different results. Always validate.
+```
+
+**Intel (ifort / ifx oneAPI):**
+
+```bash
+# Default from configure:
+FCOPTIM = -O2
+
+# Recommended for production (~20-40% faster than -O2):
+FCOPTIM = -O3 -xHost -ip -fp-model precise
+
+# Aggressive (for maximum speed, less strict floating-point):
+FCOPTIM = -O3 -xHost -ipo -no-prec-div -fp-model fast=1
+# -ipo = interprocedural optimization (slower compile, faster runtime)
+# -xHost = auto-detect CPU instruction set (AVX2, AVX-512, etc.)
+# -fp-model precise = recommended default; fast=1 relaxes IEEE for speed
+
+# For Intel ifx (LLVM-based, oneAPI 2024+):
+FCOPTIM = -O3 -xHost -ipo -fp-model precise
+```
+
+**NVIDIA HPC SDK (nvfortran, formerly PGI):**
+
+```bash
+FCOPTIM = -O3 -fast -Mvect=simd -Minfo=opt
+# -fast = -O2 -Munroll -Mnoframe -Mlre (aggressive but safe)
+# -Minfo=opt prints optimization reports (useful for tuning)
+```
+
+#### Architecture-Specific Tuning
+
+Modern CPUs benefit from explicit instruction-set targeting:
+
+| CPU Generation | GNU Flag | Intel Flag | Benefit |
+|---|---|---|---|
+| Sandy Bridge+ | `-march=sandybridge` | `-xAVX` | 256-bit AVX |
+| Haswell+ | `-march=haswell` | `-xCORE-AVX2` | AVX2 + FMA3 |
+| Skylake-X / Ice Lake | `-march=skylake-avx512` | `-xCORE-AVX512` | 512-bit AVX-512 |
+| AMD Zen 2+ | `-march=znver2` | `-xCORE-AVX2` | AVX2 optimized for AMD |
+| AMD Zen 4+ | `-march=znver4` | `-xCORE-AVX512` | AVX-512 on AMD |
+| ARM (Fugaku, AWS Graviton) | `-march=armv8.2-a+sve` | N/A | SVE vectorization |
+
+> **Portable shortcut:** `-march=native` (GNU) or `-xHost` (Intel) auto-detects the build machine's CPU. Use these on HPC where compute and build nodes share the same architecture.
+
+> **Caution on AVX-512:** Some Intel CPUs (Skylake-X, Cascade Lake) throttle clock speed when running AVX-512 workloads. For WRF, AVX-512 is usually a net win, but benchmark on your specific hardware.
+
+#### Speeding Up Compilation Itself
+
+WRF compilation takes 20–60+ minutes. To speed up the build:
+
+```bash
+# 1. Parallel make — set J in configure.wrf (or env var)
+#    Rule of thumb: J = number of CPU cores
+export J="-j 8"
+# Or edit configure.wrf directly:
+#   J = -j 8
+
+# 2. Use ccache to cache C/C++ compilation (helps on rebuilds)
+sudo apt install ccache    # or: yum install ccache
+export CC="ccache gcc"
+export CXX="ccache g++"
+# ccache doesn't help Fortran directly but speeds up C components
+
+# 3. Use tmpfs / ramdisk for build directory (Linux)
+# Avoids disk I/O bottleneck during compilation
+sudo mount -t tmpfs -o size=8G tmpfs /tmp/wrf-build
+cp -a WRF /tmp/wrf-build/ && cd /tmp/wrf-build/WRF
+./configure && ./compile em_real >& compile.log &
+
+# 4. Intel: disable IPO during development (much faster compile)
+#    Only enable -ipo for final production build
+FCOPTIM = -O2 -xHost    # Fast compile for testing
+```
+
+#### Library-Level Optimization
+
+The libraries WRF links against also affect performance:
+
+**NetCDF / HDF5 — I/O speed:**
+
+```bash
+# Build HDF5 with parallel I/O support (for pnetcdf / io_form=11)
+./configure --prefix=$DIR --enable-parallel --enable-fortran --enable-hl \
+            CC=mpicc FC=mpif90
+
+# Enable HDF5 compression tuning in WRF output
+# (set in namelist.input, not at compile time):
+#   io_form_history = 2    (NetCDF-4/HDF5 with compression)
+```
+
+**MPI library choice:**
+
+| MPI Implementation | Best For | Notes |
+|---|---|---|
+| **Intel MPI** | Intel CPUs + Intel compilers | Best integration with Intel toolchain; auto-tunes fabric |
+| **OpenMPI** | General use, mixed hardware | Most flexible; good NUMA-awareness |
+| **MPICH** | Compatibility, lighter weight | Foundation for many vendor MPIs |
+| **Cray MPICH** | Cray/HPE systems | Tuned for Slingshot/Aries interconnects |
+| **MVAPICH2** | InfiniBand clusters | Best for RDMA-capable networks |
+
+> **Tip:** On InfiniBand clusters, MVAPICH2 or Intel MPI with `I_MPI_FABRICS=shm:ofi` can reduce MPI latency by 30–50% vs TCP-based OpenMPI.
+
+#### Profile-Guided Optimization (PGO)
+
+PGO uses runtime profiling data to guide the compiler's optimization decisions. This is an advanced technique that can yield 5–15% additional speedup:
+
+```bash
+# Step 1: Build with profiling instrumentation
+# GNU:
+FCOPTIM = -O2 -fprofile-generate
+# Intel:
+FCOPTIM = -O2 -prof-gen
+
+# Step 2: Run a SHORT representative simulation (1-3 hours of model time)
+mpirun -np 4 ./wrf.exe
+# This generates .gcda (GNU) or .dyn (Intel) profile files
+
+# Step 3: Rebuild with profile feedback
+./clean -a && ./configure
+# GNU:
+FCOPTIM = -O3 -march=native -fprofile-use -fprofile-correction
+# Intel:
+FCOPTIM = -O3 -xHost -prof-use
+
+./compile em_real >& compile.log &
+# The resulting binary is optimized for your specific workload
+```
+
+> **When PGO is worth it:** Only for production configurations that will run many times with similar domain/physics settings. Not worth the effort for one-off case studies.
+
+#### Optimization Validation
+
+Aggressive optimization can introduce subtle numerical differences. Always validate:
+
+```bash
+# 1. Run the same case with -O2 (baseline) and your optimized build
+# 2. Compare wrfout files:
+ncdump -v T2 wrfout_O2_d01 > t2_O2.txt
+ncdump -v T2 wrfout_opt_d01 > t2_opt.txt
+diff t2_O2.txt t2_opt.txt
+# Small floating-point differences (1e-6 to 1e-4) are normal with -O3
+# Large differences or NaNs indicate unsafe optimization
+
+# 3. Quick validation with NCO:
+ncdiff wrfout_opt_d01 wrfout_O2_d01 diff.nc
+ncwa -y max -v T2 diff.nc max_diff.nc
+ncdump -v T2 max_diff.nc    # Should be < 0.01 K for T2
+
+# 4. Run em_b_wave ideal test — if it completes, basic numerics are OK
+cd test/em_b_wave
+mpirun -np 4 ./ideal.exe && mpirun -np 4 ./wrf.exe
+tail rsl.out.0000    # Should show SUCCESS COMPLETE WRF
+```
+
+#### Quick Reference: Recommended `configure.wrf` Edits
+
+| Scenario | `FCOPTIM` | Notes |
+|---|---|---|
+| **Safe production (GNU)** | `-O3 -ftree-vectorize -funroll-loops` | Default recommendation |
+| **Safe production (Intel)** | `-O3 -xHost -fp-model precise` | Default recommendation |
+| **Maximum speed (GNU)** | `-O3 -march=native -ffast-math -funroll-loops` | Validate results |
+| **Maximum speed (Intel)** | `-O3 -xHost -ipo -no-prec-div -fp-model fast=1` | Validate results; slow compile |
+| **Debug build** | `-O0 -g -fcheck=all -fbacktrace` (GNU) | For tracking segfaults and wrong results |
+| **Debug build (Intel)** | `-O0 -g -traceback -check all -fpe0` | Traps floating-point exceptions |
+| **Compile speed (dev)** | `-O1` or `-O0` | For rapid edit-compile-test cycles |
+
+> **Golden rule:** Start with the safe production flags. Only escalate to aggressive flags if you need more speed *and* you validate the output. The difference between `-O2` and `-O3 -march=native` is typically 15–30% runtime; the difference between a wrong forecast and a correct one is infinite.
+
 ### Domain Decomposition & Performance
 
 WRF splits the domain into rectangular **tiles** distributed across MPI processes. Good decomposition = balanced workload = faster runtime.
