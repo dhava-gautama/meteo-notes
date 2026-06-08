@@ -2193,44 +2193,52 @@ gauges = {
 
 ## 17. Examples: Idealized Test and a Real-Data Run
 
-### 17a. Build (verified ✅) and running a case
+### 17a. Idealized case — closed-basin seiche ✅ verified
 
-**Build — verified** with a conda-forge toolchain (gfortran 15 + OpenMPI +
-netCDF). SCHISM **bundles ParMETIS** (`src/ParMetis-4.0.3`), so you only need
-CMake, MPI, and netCDF:
+SCHISM is unstructured-grid, so the idealized case here is a **seiche**: a closed
+rectangular basin given an initial cosine surface tilt, which oscillates as a
+standing wave (2-D barotropic, no external data). The build and run below were
+**executed** (SCHISM, gfortran 15 / conda-forge); the output is plotted in
+[`notebooks/schism_seiche.ipynb`](notebooks/schism_seiche.ipynb).
+
+**Build** — SCHISM **bundles ParMETIS** (`src/ParMetis-4.0.3`), so you only need
+CMake + MPI + netCDF from conda:
 
 ```bash
 conda create -n models --override-channels -c conda-forge \
       gfortran gxx gcc netcdf-fortran hdf5 cmake openmpi
 conda activate models
-
-# cmake config (cmake/SCHISM.conda) — point compilers & netCDF at $CONDA_PREFIX:
-#   set(CMAKE_Fortran_COMPILER $ENV{CONDA_PREFIX}/bin/mpifort ...)
-#   set(NetCDF_FORTRAN_DIR $ENV{CONDA_PREFIX} ...)  /  set(TVD_LIM VL ...)
-mkdir build && cd build
-cmake -C ../cmake/SCHISM.conda ../src
-make -j4              # → bin/pschism_BLD_STANDALONE_TVD-VL
+# cmake/SCHISM.conda: set mpifort/mpicc/mpicxx + NetCDF_*_DIR to $CONDA_PREFIX, TVD_LIM VL
+mkdir build && cd build && cmake -C ../cmake/SCHISM.conda ../src && make -j4
+# → bin/pschism_BLD_STANDALONE_TVD-VL   (~3 min)
 ```
 
-This produced a working `pschism` executable in ~3 min.
+**Inputs** — a minimal self-contained case needs `hgrid.gr3` (a rectangular mesh
+with a single closed land-boundary ring), `hgrid.ll`, `vgrid.in` (2-D SZ,
+`nvrt=2`), `drag.gr3`, `elev.ic` (the cosine initial elevation), `param.nml`, and
+`bctides.in` with `nope=0`. The main repo ships **no** small idealized case (only
+large operational meshes), so generate one (a ~50-line script, or pyschism /
+OceanMesh2D for real domains).
 
-**Running** needs a full input set — `hgrid.gr3` (unstructured mesh), `vgrid.in`,
-`param.nml`, `bctides.in` — which the main repo does **not** bundle as a small
-idealized case (the only bundled `.gr3` files are large operational domains). Get
-a runnable case from one of:
-- the **`schism_verification_tests`** suite (community-distributed),
-- **pyschism** / **OceanMesh2D** to generate your own mesh + forcing (see §13),
-- the BMKG/operational setup in §15b.
-
-Then:
+**Run** — with scribe I/O:
 
 ```bash
-mpirun -np 4 ./pschism_BLD_STANDALONE_TVD-VL 1   # last arg = scribe (I/O) ranks
-# → outputs/out2d_*.nc, schout_*.nc
+LC_ALL=C mpirun -np 6 ./pschism_BLD_STANDALONE_TVD-VL 4   # 2 compute + 4 scribe
+# → outputs/out2d_1.nc, horizontalVelX/Y_1.nc, zCoordinates_1.nc
 ```
 
-The 2-D/3-D NetCDF output reads with `xarray`; map SCHISM's unstructured
-`nSCHISM_hgrid_node` dimension for plotting.
+> **Three gotchas to get a minimal case running:**
+> 1. **`itur=0`** — a 2-D barotropic run has no turbulence closure; the sample's
+>    default `itur=3` (GLS) requires `diffmin/diffmax.gr3` and aborts without them.
+> 2. **scribes ≥ #output-variables** — SCHISM aborts "Too few scribes" otherwise
+>    (4 output vars here → `./pschism 4`).
+> 3. **`LC_ALL=C`** for the comma-decimal locale.
+
+**Measured result:** 306-node / 500-triangle mesh, 24 frames over 12 h; the
+free-surface elevation oscillates ±0.47 m as the fundamental standing wave, the
+two ends out of phase, with period ≈ 2L/√(gH). The 2-D/3-D NetCDF reads with
+`xarray` by mapping `nSCHISM_hgrid_node` + `SCHISM_hgrid_face_nodes` (triangles).
+For a real-data tidal run see §13 and §17b.
 
 ### 17b. Worked example — Sunda/Lombok Strait barotropic tides
 

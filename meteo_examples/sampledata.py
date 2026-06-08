@@ -63,6 +63,18 @@ def ww3_propagation_path():
     """
     return _DATA / "ww3_propagation.nc"
 
+
+def schism_seiche_path():
+    """Path to the committed *real* SCHISM output from the seiche run.
+
+    A compact extract (free-surface elevation for 24 frames on the
+    unstructured mesh, node coordinates, triangle connectivity) from an actual
+    SCHISM 2-D barotropic closed-basin standing-wave (seiche) run — see the
+    SCHISM guide's idealized-run section and
+    ``models/notebooks/schism_seiche.ipynb``.
+    """
+    return _DATA / "schism_seiche.nc"
+
 # np.trapz was renamed to np.trapezoid in NumPy 2.0; support both.
 _trapz = getattr(np, "trapezoid", None) or np.trapz
 

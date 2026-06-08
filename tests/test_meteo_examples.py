@@ -127,6 +127,7 @@ def test_swan_spec_reader_matches_table_hs():
     (sampledata.roms_upwelling_path, ("sst", "temp_section")),
     (sampledata.croco_basin_path, ("zeta", "sst")),
     (sampledata.ww3_propagation_path, ("hs",)),
+    (sampledata.schism_seiche_path, ("elevation", "node_x", "tri")),
 ])
 def test_committed_samples_open_and_have_vars(loader, must_have):
     import xarray as xr

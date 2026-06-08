@@ -69,6 +69,7 @@ ensembles), [NDBC](https://www.ndbc.noaa.gov/) (marine buoys).
 | [`models/notebooks/roms_croco_output.ipynb`](models/notebooks/roms_croco_output.ipynb) | Open a ROMS/CROCO history file, plot SST, vertical section | synthetic |
 | [`models/notebooks/swan_idealized_fetch.ipynb`](models/notebooks/swan_idealized_fetch.ipynb) | **Real** SWAN v41.51 idealized run: fetch-limited Hs/Tp growth + 2-D spectrum (native `SPEC2D` reader) | real (committed) |
 | [`models/notebooks/ww3_propagation.ipynb`](models/notebooks/ww3_propagation.ipynb) | **Real** WAVEWATCH III `ww3_tp2.2` propagation test: Hs packet advection, period/direction | real (committed) |
+| [`models/notebooks/schism_seiche.ipynb`](models/notebooks/schism_seiche.ipynb) | **Real** SCHISM unstructured-grid seiche: standing wave on a triangular mesh, oscillation | real (committed) |
 | [`models/notebooks/wave_spectra.ipynb`](models/notebooks/wave_spectra.ipynb) | Plot a 2-D directional wave spectrum, integrate to Hs | synthetic |
 
 > The `wrf_idealized_supercell` notebook uses a committed extract of **real**

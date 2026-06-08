@@ -23,11 +23,11 @@ Most guides have an executable Jupyter companion that runs end-to-end against
 - **Observations:** [surface QC](observations/notebooks/surface_obs_qc.ipynb) · [ocean/buoy access](observations/notebooks/ocean_obs_access.ipynb)
 - **Verification:** [point](verification/notebooks/01_point_verification.ipynb) · [categorical precip](verification/notebooks/02_categorical_precip.ipynb) · [ensemble CRPS](verification/notebooks/03_ensemble_crps.ipynb) · [wave Hs](verification/notebooks/04_wave_verification.ipynb)
 - **Observations:** [surface QC](observations/notebooks/surface_obs_qc.ipynb) · [ocean/buoy access](observations/notebooks/ocean_obs_access.ipynb)
-- **Model output:** [WRF idealized supercell (real run)](models/notebooks/wrf_idealized_supercell.ipynb) · [WRF post-proc](models/notebooks/wrf_postprocessing.ipynb) · [SWAN idealized (real run)](models/notebooks/swan_idealized_fetch.ipynb) · [ROMS upwelling (real run)](models/notebooks/roms_upwelling.ipynb) · [CROCO basin (real run)](models/notebooks/croco_basin.ipynb) · [ROMS/CROCO post-proc](models/notebooks/roms_croco_output.ipynb) · [WW3 propagation (real run)](models/notebooks/ww3_propagation.ipynb) · [wave spectra](models/notebooks/wave_spectra.ipynb)
+- **Model output:** [WRF idealized supercell (real run)](models/notebooks/wrf_idealized_supercell.ipynb) · [WRF post-proc](models/notebooks/wrf_postprocessing.ipynb) · [SWAN idealized (real run)](models/notebooks/swan_idealized_fetch.ipynb) · [ROMS upwelling (real run)](models/notebooks/roms_upwelling.ipynb) · [CROCO basin (real run)](models/notebooks/croco_basin.ipynb) · [ROMS/CROCO post-proc](models/notebooks/roms_croco_output.ipynb) · [WW3 propagation (real run)](models/notebooks/ww3_propagation.ipynb) · [SCHISM seiche (real run)](models/notebooks/schism_seiche.ipynb) · [wave spectra](models/notebooks/wave_spectra.ipynb)
 
 ## 🛰️ Verified model runs
 
-Five models built from source and **actually run** (idealized cases, no external
+Six models built from source and **actually run** (idealized cases, no external
 data); the figures below are from their real output (see each guide's ✅ section
 and the matching notebook). Toolchain notes live in the guides.
 
@@ -35,8 +35,11 @@ and the matching notebook). Toolchain notes live in the guides.
 |:--:|:--:|:--:|
 | **WRF** — supercell updraft & rain | **ROMS** — coastal upwelling section | **CROCO** — wind-driven double gyre |
 | [![WRF](docs/img/wrf_supercell.png)](models/notebooks/wrf_idealized_supercell.ipynb) | [![ROMS](docs/img/roms_upwelling.png)](models/notebooks/roms_upwelling.ipynb) | [![CROCO](docs/img/croco_gyre.png)](models/notebooks/croco_basin.ipynb) |
-| **SWAN** — 2-D wave spectrum | **WW3** — wave-packet propagation | **Verification** — forecast Hs vs buoy |
-| [![SWAN](docs/img/swan_spectrum.png)](models/notebooks/swan_idealized_fetch.ipynb) | [![WW3](docs/img/ww3_packet.png)](models/notebooks/ww3_propagation.ipynb) | [![wave verif](docs/img/wave_verif.png)](verification/notebooks/04_wave_verification.ipynb) |
+| **SWAN** — 2-D wave spectrum | **WW3** — wave-packet propagation | **SCHISM** — unstructured-grid seiche |
+| [![SWAN](docs/img/swan_spectrum.png)](models/notebooks/swan_idealized_fetch.ipynb) | [![WW3](docs/img/ww3_packet.png)](models/notebooks/ww3_propagation.ipynb) | [![SCHISM](docs/img/schism_seiche.png)](models/notebooks/schism_seiche.ipynb) |
+
+Plus a **wave-height verification** (forecast vs buoy, with scatter index):
+[![wave verif](docs/img/wave_verif.png)](verification/notebooks/04_wave_verification.ipynb)
 
 ## Contents
 
