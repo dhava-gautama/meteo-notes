@@ -1094,6 +1094,50 @@ WW3 v6.07 with unstructured grids in E3SM:
 
 ---
 
+## 13. Examples: Idealized Test and a Real-Data Run
+
+### 13a. Idealized case — the WW3 regression tests (no external data)
+
+WW3 ships a full regression-test suite under `regtests/` — self-contained cases
+that exercise propagation and the source terms with analytical input. They are
+the canonical "does my build work" check.
+
+```bash
+cd regtests
+# 2-D propagation of a Gaussian hump on a flat domain:
+./bin/run_test -c <compiler> -w work -g 2dprop ../model ww3_tp2.2
+# source-term spin-up under constant wind:
+./bin/run_test -c <compiler> -w work ../model ww3_ts1
+```
+
+Each test runs `ww3_grid → ww3_strt → ww3_shel → ww3_ounf` and writes a NetCDF;
+`ww3_tp2.x` should advect the swell packet across the grid with the correct group
+velocity and no spurious dispersion. Read the spectral output with
+[`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb) (the `efth`
+variable).
+
+### 13b. Worked example — Indonesian-seas regional hindcast
+
+| Item | Value |
+|---|---|
+| Grid | regional, 90–145°E, 15°S–10°N, ~0.1° |
+| Switches | `ST6` source terms, `PR3 UQ` propagation, `NC4` I/O |
+| Period | 2024-01-01 → 2024-01-31, Δt set by CFL on Δx |
+| Wind | GFS / ERA5 10-m wind (`ww3_prnc`) |
+| Boundary | nested in NOAA GFS-Wave global spectra |
+| Output | gridded `HS`, `FP`, `DIR` + spectra at buoy points |
+
+```
+ww3_grid (mod_def) → ww3_prnc (wind) → ww3_bound (spectra) →
+ww3_shel (run)     → ww3_ounf (gridded) / ww3_ounp (point spectra)
+```
+
+Verify `HS` against altimeter/buoy observations with
+[`../observations/notebooks/ocean_obs_access.ipynb`](../observations/notebooks/ocean_obs_access.ipynb)
+and the scatter index; calibration is covered in §12.
+
+---
+
 ## References & Resources
 
 ### Official Documentation

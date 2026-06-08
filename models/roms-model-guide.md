@@ -1094,6 +1094,66 @@ NDTFAST = 30             ! 1-second barotropic
 
 ---
 
+## 15. Examples: Idealized Test and a Real-Data Run
+
+Two complementary ways to learn ROMS: a self-contained idealized case that runs
+in minutes with no data, and a concrete real-data application you follow on your
+own machine.
+
+### 15a. Idealized case — UPWELLING (runs on a laptop, no external data)
+
+`UPWELLING` is ROMS's canonical idealized test: a periodic channel with a
+wind-driven coastal upwelling/downwelling cell. It needs no forcing files — the
+analytical forcing is compiled in — so it's the fastest check that your build
+works.
+
+```bash
+# Build for the UPWELLING application
+cp ROMS/External/roms_upwelling.in .
+# edit build_roms.sh:  ROMS_APPLICATION=UPWELLING
+./build_roms.sh -j 4                 # → romsM (or oceanM)
+
+# Run (serial or a few MPI ranks; the case is tiny: 41x80x16)
+./romsM roms_upwelling.in            # → "ROMS/TOMS: DONE", writes roms_his.nc
+```
+
+Expected: a 41×80 grid, ~1–4 day run in seconds–minutes, output `roms_his.nc`
+with `temp`, `u`, `v`, `zeta` showing the upwelling front sharpen along the coast.
+Open it directly in
+[`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb) — the
+SST map and vertical section code work unchanged (it expects exactly these
+variable names).
+
+Other quick idealized cases: `SEAMOUNT`, `RIVERPLUME`, `LAKE_SIGNELL`, `SHOREFACE`.
+
+### 15b. Worked example — Sunda Strait regional run
+
+| Item | Value |
+|---|---|
+| Domain | 104–109°E, 8.5–4.5°S, ~3 km, 200×160 |
+| Vertical | 30 S-levels, `Vtransform=2`, `Vstretching=4` |
+| Period | 2024-01-15 → 2024-01-22 (7-day spin-up + run) |
+| Bathymetry | GEBCO 2024, smoothed to `rx0 < 0.2` |
+| IC/BC | HYCOM/Mercator GLORYS daily (T, S, u, v, zeta) |
+| Atm forcing | ERA5 hourly (winds, heat, freshwater) bulk fluxes |
+| Tides | TPXO10 (10 constituents) at the boundaries |
+
+```
+1. make_grid    → grid.nc        (see §3)
+2. make_bry/clim from GLORYS      (see §6)
+3. ERA5 → forcing.nc (bulk)       (see §6)
+4. TPXO10 → tides.nc              (see §6)
+5. set roms.in: NtileI/NtileJ, DT=60 s, NDEFHIS for daily output
+6. mpirun -np 16 ./romsM roms.in  → ocean_his_*.nc
+```
+
+Then verify SST against buoys with
+[`../observations/notebooks/ocean_obs_access.ipynb`](../observations/notebooks/ocean_obs_access.ipynb)
+and `meteo_examples.verif.continuous_metrics`. See §13 for the full Indonesian
+Throughflow / Sunda Strait application details.
+
+---
+
 ## References
 
 ### Foundational Papers

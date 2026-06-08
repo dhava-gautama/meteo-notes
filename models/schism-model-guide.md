@@ -2191,4 +2191,47 @@ gauges = {
 
 ---
 
+## 17. Examples: Idealized Test and a Real-Data Run
+
+### 17a. Idealized case — barotropic test (no external data)
+
+The SCHISM source ships small verification cases in the `test/` and `Test_*`
+suites (e.g. a barotropic standing-wave / inundation case on a simple mesh).
+They need only the bundled mesh and a synthetic tide, so they confirm a build
+end-to-end in minutes.
+
+```bash
+# Typical layout: hgrid.gr3, vgrid.in, param.nml, bctides.in all provided
+ln -s ../../bin/pschism .
+mpirun -np 4 ./pschism 4            # last arg = scribe (I/O) ranks
+# → outputs/out2d_*.nc, schout_*.nc
+```
+
+Check that the modelled elevation reproduces the prescribed tidal forcing.
+The 2-D/3-D NetCDF output reads with `xarray`; for SST/temperature sections the
+same indexing as [`notebooks/roms_croco_output.ipynb`](../models/notebooks/roms_croco_output.ipynb)
+applies once you map SCHISM's unstructured `nSCHISM_hgrid_node` dimension.
+
+### 17b. Worked example — Sunda/Lombok Strait barotropic tides
+
+| Item | Value |
+|---|---|
+| Mesh | unstructured, ~500 m straits → ~5 km open ocean (OceanMesh2D/pyschism) |
+| Vertical | LSC² (or 2-D depth-averaged for a tide-only run) |
+| Period | 2024-01-01 → 2024-01-31, `dt = 100–150 s` |
+| Tides | `bctides.in` from FES2022 / TPXO10 (8–13 constituents) |
+| Atm | ERA5 `sflux` (winds, pressure) |
+| Boundary | GLORYS/HYCOM `*.th.nc` (T, S, elevation) for baroclinic runs |
+
+```
+pyschism: gen_bctides (FES2022) → gen_sflux (ERA5) → gen_hotstart (GLORYS)
+ParMETIS partition → mpirun -np N ./pschism  → outputs/
+```
+
+Validate elevation against tide gauges (utide harmonic analysis, see the
+[ocean-obs guide](../observations/ocean-obs-guide.md)); target RMSE < 0.15 m in
+the straits (see §15). pyschism pre/post-processing is in §13–§14.
+
+---
+
 *Guide prepared for SCHISM v5.12 — Indonesian Waters focus. For BMKG operational implementation, cross-reference with BMKG Marine HPC environment specifications and CMEMS data access credentials. Community support: https://github.com/schism-dev/schism/discussions*

@@ -2098,6 +2098,50 @@ NTIMES == 21600    ! 30 days at dt=120s
 
 ---
 
+## 17. Examples: Idealized Test and a Real-Data Run
+
+### 17a. Idealized case — BASIN / BENGUELA_LR (no external data)
+
+CROCO ships ready-to-run idealized cases under `TEST_CASES/`. Two good starting
+points:
+
+- **`BASIN`** — wind-driven gyre in a flat rectangular basin; pure dynamics, the
+  fastest build check.
+- **`BENGUELA_LR`** — low-resolution Benguela upwelling system; the standard
+  CROCO tutorial case, still analytical/self-contained.
+
+```bash
+# Configure the case in cppdefs.h, e.g.:  #define BASIN   (undef others)
+./jobcomp                       # → croco executable
+ln -sf TEST_CASES/croco.in.BASIN croco.in
+./croco croco.in                # → writes croco_his.nc
+```
+
+The history file uses the same `temp/zeta/lon_rho/lat_rho/s_rho` layout as ROMS,
+so [`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb)
+opens it directly.
+
+### 17b. Worked example — Sunda Strait with AGRIF nesting
+
+| Item | Value |
+|---|---|
+| Parent | 104–109°E, 8.5–4.5°S, ~3 km |
+| Child (AGRIF) | Sunda Strait, 1 km, `coef=3`, 2-way online nest |
+| Vertical | 32 levels, `theta_s=7, theta_b=2, hc=150 m` |
+| Forcing | CROCO_PYTOOLS: `make_grid` / `make_forcing` (ERA5) / `make_bry` (GLORYS) / `make_tides` (FES2022/TPXO10) |
+| Run | SLURM, `croco.in` with `AGRIF_FixedGrids.in` |
+
+```
+make_grid → make_bry → make_clim → make_forcing → make_tides   (CROCO_PYTOOLS)
+./jobcomp  (CPP: AGRIF, TIDES, BULK_FLUX, MRL_WCI off)
+sbatch run_croco.slurm   → croco_his.nc + croco_his.nc.1 (child)
+```
+
+See §15 for the full Indonesian-waters / ITF-transport application; the
+[CROCO_PYTOOLS pre-processing](#) steps are in §4–§6 above.
+
+---
+
 ## References
 
 ### CROCO Core Papers

@@ -1355,6 +1355,61 @@ STOP
 
 ---
 
+## 13. Examples: Idealized Test and a Real-Data Run
+
+### 13a. Idealized case — stationary wind-sea on a flat shelf (no external data)
+
+The quickest SWAN check needs no boundary or bathymetry files — a constant-depth
+rectangular grid with a uniform wind reaches a stationary wind-sea you can verify
+against fetch-limited growth laws.
+
+```
+$ cat INPUT
+PROJECT 'test' '01'
+SET LEVEL 0. NAUTICAL
+MODE STATIONARY TWODIMENSIONAL
+CGRID REGULAR 0. 0. 0. 20000. 10000. 40 20 CIRCLE 36 0.04 1.0 25
+INPGRID BOTTOM REGULAR 0. 0. 0. 1 1 20000. 10000.
+READINP BOTTOM 1. 'flat30m.bot' 3 0 FREE      ! a file of constant 30 m
+WIND 15. 270.                                  ! 15 m/s from the west
+GEN3 KOMEN
+BREAKING
+FRICTION JONSWAP
+OUTPUT
+TABLE 'COMPGRID' HEADER 'out.tab' XP YP HSIGN TPS DIR
+COMPUTE
+STOP
+
+$ swanrun -input INPUT          # → out.tab with Hs growing with fetch
+```
+
+Expected: `HSIGN` grows downwind toward the fetch-limited limit — a textbook
+sanity check. Add `SPEC` output to write a 2-D spectrum, then read it with
+[`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb).
+
+### 13b. Worked example — Sunda Strait nearshore waves
+
+| Item | Value |
+|---|---|
+| Grid | unstructured (or 0.5 km curvilinear), Sunda Strait |
+| Mode | NONSTATIONARY, 2024-01-15 → 2024-01-17, Δt = 10 min |
+| Bathymetry | GEBCO 2024 |
+| Wind | WRF 10-m wind (`U10/V10`) or ERA5, via `READINP WIND` |
+| Boundary | WW3 global spectra nested in (`BOUNDNEST3 WW3`) |
+| Physics | `GEN3 ST6`, `BREAKING`, `FRICTION`, `TRIAD` (shallow) |
+
+```
+SWAN nested in WW3:  ww3_ounp → spec files → SWAN BOUNDNEST3 WW3 'ww3_spec.nc'
+COMPUTE NONSTAT 20240115.000000 10 MIN 20240117.000000
+```
+
+Verify `HSIGN` against NDBC/coastal buoys with
+[`../observations/notebooks/ocean_obs_access.ipynb`](../observations/notebooks/ocean_obs_access.ipynb)
+and the wave **scatter index** (see the verification guide). Calibration details
+are in §12.
+
+---
+
 ## References & Resources
 
 ### Official Documentation
