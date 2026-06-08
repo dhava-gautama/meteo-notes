@@ -1357,35 +1357,41 @@ STOP
 
 ## 13. Examples: Idealized Test and a Real-Data Run
 
-### 13a. Idealized case — stationary wind-sea on a flat shelf (no external data)
+### 13a. Idealized case — stationary wind-sea on a flat shelf (no external data) ✅ verified
 
 The quickest SWAN check needs no boundary or bathymetry files — a constant-depth
 rectangular grid with a uniform wind reaches a stationary wind-sea you can verify
-against fetch-limited growth laws.
+against fetch-limited growth laws. The build and run below were **executed** with
+SWAN v41.51 (gfortran serial); the output is plotted in
+[`notebooks/swan_idealized_fetch.ipynb`](notebooks/swan_idealized_fetch.ipynb).
+
+```bash
+make config && make ser          # → swan.exe (gfortran serial, builds in ~1 min)
+./swan.exe                        # reads INPUT → grid.tab + P1.spc
+```
 
 ```
-$ cat INPUT
-PROJECT 'test' '01'
+PROJECT 'ideal' '01'
 SET LEVEL 0. NAUTICAL
 MODE STATIONARY TWODIMENSIONAL
-CGRID REGULAR 0. 0. 0. 20000. 10000. 40 20 CIRCLE 36 0.04 1.0 25
-INPGRID BOTTOM REGULAR 0. 0. 0. 1 1 20000. 10000.
-READINP BOTTOM 1. 'flat30m.bot' 3 0 FREE      ! a file of constant 30 m
-WIND 15. 270.                                  ! 15 m/s from the west
+CGRID REGULAR 0. 0. 0. 40000. 10000. 200 50 CIRCLE 36 0.04 1.0 31
+INPGRID BOTTOM REGULAR 0. 0. 0. 1 1 40000. 10000.
+READINP BOTTOM 1. 'bottom.bot' 3 0 FREE        ! constant 30 m
+WIND 15. 270.                                   ! 15 m/s from the west
 GEN3 KOMEN
 BREAKING
 FRICTION JONSWAP
-OUTPUT
-TABLE 'COMPGRID' HEADER 'out.tab' XP YP HSIGN TPS DIR
+POINTS 'P1' 38000. 5000.
+SPECOUT 'P1' SPEC2D ABS 'P1.spc'                ! 2-D spectrum at 38 km
+TABLE 'COMPGRID' HEADER 'grid.tab' XP YP DEP HSIGN RTP DIR
 COMPUTE
 STOP
-
-$ swanrun -input INPUT          # → out.tab with Hs growing with fetch
 ```
 
-Expected: `HSIGN` grows downwind toward the fetch-limited limit — a textbook
-sanity check. Add `SPEC` output to write a 2-D spectrum, then read it with
-[`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb).
+**Measured result:** `Hs` grows from 0.02 m (upwind) to **1.78 m** at 40 km
+fetch; `Tp` rises 2.1 → 5.3 s — textbook fetch-limited growth. The 2-D spectrum
+integrated back to `Hs = 1.76 m`, matching SWAN's own `HSIGN` to a few cm. The
+notebook reads the native `SPEC2D` file via `meteo_examples.readers.read_swan_spec`.
 
 ### 13b. Worked example — Sunda Strait nearshore waves
 

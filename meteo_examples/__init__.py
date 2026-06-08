@@ -19,6 +19,6 @@ sampledata  Synthetic-but-realistic NetCDF generators for the model
 
 __version__ = "0.1.0"
 
-from . import verif, dataio, sampledata  # noqa: E402,F401
+from . import verif, dataio, sampledata, readers  # noqa: E402,F401
 
-__all__ = ["verif", "dataio", "sampledata"]
+__all__ = ["verif", "dataio", "sampledata", "readers"]
