@@ -42,6 +42,17 @@ def roms_upwelling_path():
     """
     return _DATA / "roms_upwelling.nc"
 
+
+def croco_basin_path():
+    """Path to the committed *real* CROCO output from the BASIN run.
+
+    A compact extract (free-surface SSH for 37 frames, surface temperature and
+    depth-averaged currents) from an actual CROCO BASIN idealized run (the
+    wind-driven double gyre) — see the CROCO guide's idealized-run section and
+    ``models/notebooks/croco_basin.ipynb``.
+    """
+    return _DATA / "croco_basin.nc"
+
 # np.trapz was renamed to np.trapezoid in NumPy 2.0; support both.
 _trapz = getattr(np, "trapezoid", None) or np.trapz
 

@@ -2100,26 +2100,40 @@ NTIMES == 21600    ! 30 days at dt=120s
 
 ## 17. Examples: Idealized Test and a Real-Data Run
 
-### 17a. Idealized case — BASIN / BENGUELA_LR (no external data)
+### 17a. Idealized case — BASIN (wind-driven double gyre, no external data) ✅ verified
 
-CROCO ships ready-to-run idealized cases under `TEST_CASES/`. Two good starting
-points:
-
-- **`BASIN`** — wind-driven gyre in a flat rectangular basin; pure dynamics, the
-  fastest build check.
-- **`BENGUELA_LR`** — low-resolution Benguela upwelling system; the standard
-  CROCO tutorial case, still analytical/self-contained.
+CROCO ships ready-to-run idealized cases under `TEST_CASES/`. **`BASIN`** — a
+double-gyre wind stress over a flat rectangular basin — is the fastest build
+check and produces the textbook wind-driven gyre circulation. The run below was
+**executed** (CROCO, gfortran 15 / conda-forge); the output is plotted in
+[`notebooks/croco_basin.ipynb`](notebooks/croco_basin.ipynb).
 
 ```bash
-# Configure the case in cppdefs.h, e.g.:  #define BASIN   (undef others)
-./jobcomp                       # → croco executable
-ln -sf TEST_CASES/croco.in.BASIN croco.in
-./croco croco.in                # → writes croco_his.nc
+# Use create_config.bash — it stages all source paths correctly:
+./create_config.bash -n basin_cfg -o "oce-dev test_cases" -s <croco_src> -d <home> -w <home>
+cd basin_cfg
+# select the case:  #undef REGIONAL  /  #define BASIN   in cppdefs.h
+./jobcomp                                # → croco
+cp TEST_CASES/croco.in.Basin croco.in
+LC_ALL=C ./croco croco.in                # → "MAIN: DONE", basin_his.nc
 ```
 
-The history file uses the same `temp/zeta/lon_rho/lat_rho/s_rho` layout as ROMS,
-so [`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb)
-opens it directly.
+> **Build/run gotchas (all hit on a fresh box):**
+> 1. **Use `create_config.bash`**, not the in-tree `jobcomp` directly — the raw
+>    `jobcomp` mis-stages the optional STOGEN/PISCES component sources
+>    (`No rule to make stoexternal.o / par_pisces.o …`). Restricting options to
+>    `oce-dev test_cases` keeps the build lean.
+> 2. **`gmake -r`** — Fortran `.mod` files otherwise trip gmake's built-in
+>    Modula-2 (`m2c`) rule.
+> 3. **`LC_ALL=C`** — a comma-decimal locale breaks list-directed reads.
+> 4. CROCO reads its input **as an argument** (`./croco croco.in`) — *not* stdin
+>    like ROMS.
+
+**Measured result:** 62×52×10 basin, 37 records; SSH `zeta` ±11 cm forming the
+subpolar/subtropical gyre pair, peak barotropic speed ~11 cm/s. The history file
+shares ROMS's `temp/zeta/s_rho` layout, so
+[`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb) opens a
+regional `croco_his.nc` directly.
 
 ### 17b. Worked example — Sunda Strait with AGRIF nesting
 
