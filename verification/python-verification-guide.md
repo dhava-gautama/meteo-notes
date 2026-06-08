@@ -1,5 +1,7 @@
 # Python Forecast Verification Guide
 
+> **▶ Runnable notebooks:** [`01_point_verification`](notebooks/01_point_verification.ipynb) (continuous metrics: ME/MAE/RMSE/r, bootstrap CIs, diurnal bias) · [`02_categorical_precip`](notebooks/02_categorical_precip.ipynb) (contingency tables, POD/FAR/CSI/ETS, performance diagram, FSS) · [`03_ensemble_crps`](notebooks/03_ensemble_crps.ipynb) (rank histogram, CRPS, spread–skill). Each runs end-to-end on real public data. Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > Lightweight forecast verification using the scientific Python stack — no MET/METplus required.
 > Complements the theory-focused [Forecast Verification: Methods and Key Concepts](forecast-verification-notes.md)
 > and the MET-based [MET Practical Verification Guide](met-verification-guide.md).

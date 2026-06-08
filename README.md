@@ -6,10 +6,22 @@ Personal notes on meteorological modeling, observations, and forecast verificati
 
 ```
 meteo-notes/
-├── verification/       # Forecast verification methods and metrics
-├── models/             # Numerical weather prediction and modeling
-└── observations/       # Observational data, instruments, and QC
+├── verification/       # Forecast verification methods and metrics (+ notebooks/)
+├── models/             # Numerical weather prediction and modeling (+ notebooks/)
+├── observations/       # Observational data, instruments, and QC (+ notebooks/)
+└── meteo_examples/     # Shared Python helpers backing the runnable notebooks
 ```
+
+## 🟢 Runnable examples (notebooks)
+
+Most guides have an executable Jupyter companion that runs end-to-end against
+**real public data** (with a committed offline cache). See
+**[NOTEBOOKS.md](NOTEBOOKS.md)** for the full index and one-time setup
+(`python3 -m venv venv && pip install -r requirements.txt && pip install -e .`).
+
+- **Verification:** [point](verification/notebooks/01_point_verification.ipynb) · [categorical precip](verification/notebooks/02_categorical_precip.ipynb) · [ensemble CRPS](verification/notebooks/03_ensemble_crps.ipynb)
+- **Observations:** [surface QC](observations/notebooks/surface_obs_qc.ipynb) · [ocean/buoy access](observations/notebooks/ocean_obs_access.ipynb)
+- **Model output:** [WRF](models/notebooks/wrf_postprocessing.ipynb) · [ROMS/CROCO](models/notebooks/roms_croco_output.ipynb) · [wave spectra](models/notebooks/wave_spectra.ipynb)
 
 ## Contents
 

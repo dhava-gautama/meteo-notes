@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meteo-examples"
+version = "0.1.0"
+description = "Runnable example helpers for the meteo-notes guides (verification, observations, model post-processing)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "xarray",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "requests",
+    "properscoring",
+    "netCDF4",
+]
+
+[project.optional-dependencies]
+# Heavier / optional stacks used by a subset of notebooks.
+maps = ["cartopy"]            # spatial map plots
+grib = ["cfgrib", "eccodes"]  # reading raw GRIB2 model output
+ocean = ["argopy", "utide", "erddapy"]  # Argo floats, tidal analysis
+notebook = ["jupyter", "nbconvert", "ipykernel"]
+
+[tool.setuptools]
+packages = ["meteo_examples"]
+
+[tool.setuptools.package-data]
+meteo_examples = ["data/*.csv"]

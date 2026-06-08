@@ -1,0 +1,16 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+build/
+dist/
+
+# Notebook-generated outputs (figures, sample NetCDF) — regenerated on run
+models/notebooks/*.nc
+*_summary.png

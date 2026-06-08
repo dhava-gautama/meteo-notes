@@ -1,5 +1,7 @@
 # SWAN: Complete Guide from Grid Setup to Visualization
 
+> **▶ Runnable notebook:** [`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb) — read a 2-D directional wave spectrum `E(f, θ)`, plot it on a polar grid, integrate the spectral moments to Hs/Tp/mean direction (the integration code is identical for SWAN `.spec` output). Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > A practical guide covering the full SWAN (Simulating WAves Nearshore) workflow for coastal and nearshore wave modeling.
 > Covers spectral wave theory, all physics options, grid types, input/output, nesting, calibration, and running strategies.
 

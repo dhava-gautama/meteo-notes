@@ -1,0 +1,24 @@
+# Core stack for the meteo-notes runnable examples / notebooks.
+# Install into a virtual environment (see NOTEBOOKS.md):
+#     python3 -m venv venv && source venv/bin/activate
+#     pip install -r requirements.txt && pip install -e .
+numpy
+pandas
+xarray
+scipy
+scikit-learn
+matplotlib
+requests
+properscoring
+netCDF4
+jupyter
+nbconvert
+ipykernel
+
+# --- Optional extras (uncomment as needed) ---
+# cartopy        # map projections for spatial plots
+# cfgrib         # read raw GRIB2 model output
+# eccodes        # GRIB backend for cfgrib
+# argopy         # Argo float access (ocean obs notebook)
+# utide          # tidal harmonic analysis (ocean obs notebook)
+# erddapy        # ERDDAP server access (ocean obs notebook)

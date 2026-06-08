@@ -1,5 +1,7 @@
 # Ocean Observations: Complete Guide
 
+> **▶ Runnable notebook:** [`notebooks/ocean_obs_access.ipynb`](notebooks/ocean_obs_access.ipynb) — access real NDBC moored-buoy data (wave height, period, SST, wind), run range QC, and compute sea-state diagnostics; references the optional argopy/utide workflows. Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > A practical guide to ocean observational data — platforms, data sources,
 > quality control, and Python-based access. Covers moored and drifting buoys,
 > Argo floats, tide gauges, and satellite ocean products, with a focus on

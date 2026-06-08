@@ -1,5 +1,7 @@
 # WRF Model: Complete Guide from Data Download to Visualization
 
+> **▶ Runnable notebook:** [`notebooks/wrf_postprocessing.ipynb`](notebooks/wrf_postprocessing.ipynb) — open a `wrfout`, map 2-m temperature, derive period precipitation from the accumulated fields, overlay 10-m wind, and take a cross-section (runs on a built-in sample file; works unchanged on real output). Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > A practical guide covering the full WRF (Weather Research and Forecasting) workflow.
 > Based on **WRF v4.7.1** (June 2025) — the latest stable release.
 
@@ -2369,6 +2371,131 @@ grep -i error rsl.error.0000                   # Namelist errors
 - `mp_physics=17, 19, 21, 22` deprecated (use `mp_physics=18` with `nssl_*` flags)
 - MYNN module names changed: `*_mynn_*` -> `*_mynnedmf_*`
 - `mp_zero_out` now only affects `moist` array; use `mp_zero_out_all` for old behavior
+
+---
+
+## 13. Worked Example: 48-h Sunda Strait Forecast
+
+A complete, concrete run you can reproduce — every value below is specific, not a
+placeholder. It ties together Sections 2–7 and ends in the
+[`wrf_postprocessing.ipynb`](notebooks/wrf_postprocessing.ipynb) notebook.
+
+**Scenario.** Deterministic 48-h forecast over the Sunda Strait / West Java for a
+wet-season convective day.
+
+| Item | Value |
+|---|---|
+| Init time | 2024-01-15 00:00 UTC |
+| Forecast length | 48 h (valid to 2024-01-17 00 UTC) |
+| IC/BC | GFS 0.25°, files `f000`–`f048` every 3 h |
+| Domain | single, 3 km, 220 × 200 grid, centered 6.0°S / 106.0°E |
+| Vertical | 45 levels, `p_top = 5000` Pa |
+| Physics | NCAR Tropical suite (see §5) |
+| Output | hourly `wrfout`, history per 60 min |
+
+### Step 1 — Get GFS data (§2)
+
+```bash
+# 17 files: analysis + 16 forecast steps at 3-hourly spacing
+URL=https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs.20240115/00/atmos
+for h in $(seq -w 0 3 48); do
+  curl -s -o gfs.t00z.pgrb2.0p25.f${h} \
+    "${URL}/gfs.t00z.pgrb2.0p25.f0${h}"
+done
+```
+
+### Step 2 — WPS (§3)
+
+Key `namelist.wps` blocks:
+
+```fortran
+&share
+ start_date = '2024-01-15_00:00:00',
+ end_date   = '2024-01-17_00:00:00',
+ interval_seconds = 10800,            ! 3-hourly GFS
+/
+&geogrid
+ e_we = 221,  e_sn = 201,
+ dx = 3000,   dy = 3000,
+ map_proj = 'mercator',               ! equatorial domain → Mercator
+ ref_lat = -6.0, ref_lon = 106.0,
+ geog_data_res = 'default',
+/
+```
+
+```bash
+./geogrid.exe                                   # → geo_em.d01.nc
+link_grib.csh gfs.t00z.pgrb2.0p25.f*
+ln -sf ungrib/Variable_Tables/Vtable.GFS Vtable
+./ungrib.exe                                     # → FILE:2024-01-15_00 …
+./metgrid.exe                                    # → met_em.d01.*.nc
+```
+
+### Step 3 — real.exe + wrf.exe (§4)
+
+Key `namelist.input` changes from the default:
+
+```fortran
+&time_control
+ run_hours = 48,
+ start_year=2024, start_month=01, start_day=15, start_hour=00,
+ end_year=2024,   end_month=01,   end_day=17,   end_hour=00,
+ interval_seconds = 10800,
+ history_interval = 60,                ! hourly output
+ frames_per_outfile = 1,
+/
+&domains
+ time_step = 18,                       ! ~6×dx(km) for 3 km
+ e_we = 221, e_sn = 201, e_vert = 45,
+ dx = 3000, dy = 3000, p_top_requested = 5000,
+/
+&physics                               ! NCAR Tropical suite
+ mp_physics = 6, cu_physics = 16,      ! WSM6 + Tiedtke (or 0 if dx≤3 km & explicit)
+ bl_pbl_physics = 1, sf_sfclay_physics = 1,
+ ra_lw_physics = 4, ra_sw_physics = 4, sf_surface_physics = 2,
+/
+```
+
+```bash
+./real.exe          # → wrfinput_d01, wrfbdy_d01
+mpirun -np 16 ./wrf.exe   # → wrfout_d01_2024-01-15_00:00:00 …
+```
+
+> **Expected wall-clock:** ~1.5–2.5 h on a 16-core workstation (see
+> [Intel ML / CPU optimization guide](../intel-ml-optimization-guide.md) for
+> thread/affinity tuning). Watch `rsl.error.0000`; a healthy run prints
+> `Timing for main: …` lines and ends with `SUCCESS COMPLETE WRF`.
+
+### Step 4 — sanity checks before trusting output
+
+```bash
+ncdump -h wrfout_d01_2024-01-15_00:00:00 | grep -E "T2|RAINNC|U10"
+# CFL check — if you see this in rsl.error.*, cut time_step:
+grep -i "cfl" rsl.error.0000 | head
+```
+
+### Step 5 — post-process & visualize
+
+Open the result in the notebook — map `T2`, derive 48-h precipitation from
+`RAINNC + RAINC`, and overlay 10-m wind:
+
+```python
+import xarray as xr
+ds = xr.open_dataset("wrfout_d01_2024-01-15_00:00:00")
+# then follow notebooks/wrf_postprocessing.ipynb verbatim
+```
+
+To **verify** the forecast against Jakarta (`WIII`) observations, feed `T2` into
+[`../verification/notebooks/01_point_verification.ipynb`](../verification/notebooks/01_point_verification.ipynb).
+
+### Common first-run failures
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `metgrid` missing fields | Wrong Vtable | use `Vtable.GFS` |
+| `real.exe` segfault | `e_vert` mismatch / bad `p_top` | keep `p_top ≥` GFS top (≈ 1 hPa → 5000 Pa safe) |
+| CFL errors, NaNs | `time_step` too large | reduce to `5–6 × dx_km` |
+| All-zero precip | `cu_physics` off at 3 km expected | convection is resolved; check `RAINNC` not `RAINC` |
 
 ---
 

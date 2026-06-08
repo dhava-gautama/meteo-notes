@@ -1,5 +1,7 @@
 # WAVEWATCH III: Complete Guide from Grid Setup to Visualization
 
+> **▶ Runnable notebook:** [`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb) — read a 2-D directional wave spectrum `E(f, θ)`, plot it on a polar grid, integrate the spectral moments to Hs/Tp/mean direction (the integration code applies directly to the WW3 `efth` spectral variable). Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > A practical guide covering the full WAVEWATCH III (WW3) workflow for global, regional, and coastal wave modeling.
 > Covers governing equations, switch file system, all source term packages, grid types, multi-grid mosaic, input/output, nesting, operational use, coupling, and calibration.
 

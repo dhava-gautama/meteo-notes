@@ -1,5 +1,7 @@
 # Surface Observations: Complete Guide
 
+> **▶ Runnable notebook:** [`notebooks/surface_obs_qc.ipynb`](notebooks/surface_obs_qc.ipynb) — pull real ASOS observations and run the §7 QC pipeline (range, consistency, spike, persistence checks) with injected errors so each check visibly fires. Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > A practical guide to surface meteorological observations — formats, data sources,
 > quality control, and Python-based access. Covers SYNOP, METAR, and automated
 > station data with a focus on preparing observations for NWP verification.

@@ -1,5 +1,7 @@
 # CROCO: Complete Guide from Grid Setup to Visualization
 
+> **▶ Runnable notebook:** [`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb) — open a ROMS/CROCO history file, map SST and sea-surface height, and take a vertical temperature section on the S-coordinate (runs on a built-in sample file; works unchanged on your `croco_his.nc`). Setup: [NOTEBOOKS.md](../NOTEBOOKS.md).
+
 > A practical guide covering the full CROCO (Coastal and Regional Ocean COmmunity) workflow — from grid generation and forcing preparation through compilation, configuration, AGRIF online nesting, non-hydrostatic dynamics, and post-processing.
 > Regional focus on **Indonesian waters and BMKG** operational context.
 
