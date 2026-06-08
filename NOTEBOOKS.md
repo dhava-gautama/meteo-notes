@@ -63,6 +63,7 @@ ensembles), [NDBC](https://www.ndbc.noaa.gov/) (marine buoys).
 |---|---|---|
 | [`models/notebooks/wrf_idealized_supercell.ipynb`](models/notebooks/wrf_idealized_supercell.ipynb) | **Real** output from a WRF `em_quarter_ss` idealized run: updraft, rain swath, vertical W section, intensification | real (committed extract) |
 | [`models/notebooks/wrf_postprocessing.ipynb`](models/notebooks/wrf_postprocessing.ipynb) | Open a `wrfout`, plot T2/precip/10-m wind, derive period precip | synthetic |
+| [`models/notebooks/roms_upwelling.ipynb`](models/notebooks/roms_upwelling.ipynb) | **Real** ROMS 4.3 UPWELLING run: SST, cross-channel upwelling section, evolution | real (committed) |
 | [`models/notebooks/roms_croco_output.ipynb`](models/notebooks/roms_croco_output.ipynb) | Open a ROMS/CROCO history file, plot SST, vertical section | synthetic |
 | [`models/notebooks/swan_idealized_fetch.ipynb`](models/notebooks/swan_idealized_fetch.ipynb) | **Real** SWAN v41.51 idealized run: fetch-limited Hs/Tp growth + 2-D spectrum (native `SPEC2D` reader) | real (committed) |
 | [`models/notebooks/wave_spectra.ipynb`](models/notebooks/wave_spectra.ipynb) | Plot a 2-D directional wave spectrum, integrate to Hs | synthetic |

@@ -31,6 +31,17 @@ def wrf_idealized_path():
     """
     return _DATA / "wrf_em_quarter_ss.nc"
 
+
+def roms_upwelling_path():
+    """Path to the committed *real* ROMS output from the UPWELLING run.
+
+    A compact extract (SST, a cross-channel temperature section, bathymetry,
+    21 frames) from an actual ROMS 4.3 ``UPWELLING`` idealized run — see the
+    ROMS guide's idealized-run section and
+    ``models/notebooks/roms_upwelling.ipynb``.
+    """
+    return _DATA / "roms_upwelling.nc"
+
 # np.trapz was renamed to np.trapezoid in NumPy 2.0; support both.
 _trapz = getattr(np, "trapezoid", None) or np.trapz
 

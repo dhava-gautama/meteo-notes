@@ -1100,29 +1100,35 @@ Two complementary ways to learn ROMS: a self-contained idealized case that runs
 in minutes with no data, and a concrete real-data application you follow on your
 own machine.
 
-### 15a. Idealized case — UPWELLING (runs on a laptop, no external data)
+### 15a. Idealized case — UPWELLING (runs on a laptop, no external data) ✅ verified
 
 `UPWELLING` is ROMS's canonical idealized test: a periodic channel with a
 wind-driven coastal upwelling/downwelling cell. It needs no forcing files — the
 analytical forcing is compiled in — so it's the fastest check that your build
-works.
+works. The run below was **executed** (ROMS 4.3, gfortran 15 / conda-forge
+netCDF); the output is plotted in
+[`notebooks/roms_upwelling.ipynb`](notebooks/roms_upwelling.ipynb).
 
 ```bash
-# Build for the UPWELLING application
-cp ROMS/External/roms_upwelling.in .
-# edit build_roms.sh:  ROMS_APPLICATION=UPWELLING
-./build_roms.sh -j 4                 # → romsM (or oceanM)
-
-# Run (serial or a few MPI ranks; the case is tiny: 41x80x16)
-./romsM roms_upwelling.in            # → "ROMS/TOMS: DONE", writes roms_his.nc
+# build_roms.sh: ROMS_APPLICATION=UPWELLING, FORT=gfortran,
+#                MY_HEADER_DIR=ROMS/Include, MY_ANALYTICAL_DIR=ROMS/Functionals
+./build_roms.sh -j 4                       # → romsS (serial)
+LC_ALL=C ./romsS < roms_upwelling.in       # → "ROMS/TOMS: DONE", writes roms_his.nc
 ```
 
-Expected: a 41×80 grid, ~1–4 day run in seconds–minutes, output `roms_his.nc`
-with `temp`, `u`, `v`, `zeta` showing the upwelling front sharpen along the coast.
-Open it directly in
-[`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb) — the
-SST map and vertical section code work unchanged (it expects exactly these
-variable names).
+> **Three gotchas hit while getting this to run on a fresh box** — worth knowing:
+> 1. **ROMS reads stdin**, not a filename argument: use `./romsS < roms_upwelling.in`.
+>    Passing the file as an argument segfaults in `read_PhyPar`.
+> 2. **Set `LC_ALL=C`.** A comma-decimal locale (the box was `id_ID.UTF-8`) makes
+>    Fortran's list-directed read reject `300.0` (`FIO`/`read_real` error).
+> 3. **Use a stable optimizer.** nvfortran's `-Mipa=fast` and gfortran's
+>    `-O3 -ffast-math` both miscompiled the solver here; plain `-O2` is solid.
+
+**Measured result:** 43×82×16 grid, 5-day run, 21 history records; the
+cross-channel SST contrast grows to ~4 °C as isotherms tilt up at the upwelling
+coast. The `temp`/`zeta`/`s_rho` layout matches CROCO, so
+[`notebooks/roms_croco_output.ipynb`](notebooks/roms_croco_output.ipynb) (the
+`lon_rho/lat_rho` variant) works on a real regional `*_his.nc` unchanged.
 
 Other quick idealized cases: `SEAMOUNT`, `RIVERPLUME`, `LAKE_SIGNELL`, `SHOREFACE`.
 
