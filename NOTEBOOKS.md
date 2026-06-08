@@ -51,6 +51,7 @@ ensembles), [NDBC](https://www.ndbc.noaa.gov/) (marine buoys).
 | [`verification/notebooks/01_point_verification.ipynb`](verification/notebooks/01_point_verification.ipynb) | 2-m temperature forecast vs station obs: ME/MAE/RMSE/r, timeseries, scatter, error-by-lead | live |
 | [`verification/notebooks/02_categorical_precip.ipynb`](verification/notebooks/02_categorical_precip.ipynb) | Precip contingency tables, POD/FAR/CSI/ETS by threshold, reliability diagram, FSS | live |
 | [`verification/notebooks/03_ensemble_crps.ipynb`](verification/notebooks/03_ensemble_crps.ipynb) | Ensemble CRPS, rank histogram, spread–skill | live |
+| [`verification/notebooks/04_wave_verification.ipynb`](verification/notebooks/04_wave_verification.ipynb) | Forecast Hs vs NDBC buoy: ME/RMSE/**scatter index**, scatter & Q–Q | live |
 
 ### Observations
 | Notebook | What it does | Data |

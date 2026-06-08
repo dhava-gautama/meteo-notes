@@ -20,6 +20,7 @@ Sources (all free, no API key):
 from __future__ import annotations
 
 import io
+import os
 import pathlib
 
 import pandas as pd
@@ -42,7 +43,12 @@ def _cached_csv(cache_name, build_fn, prefer_cache=False, parse_dates=None):
     """Generic cache wrapper for DataFrame-producing loaders.
 
     build_fn() -> DataFrame is only called when a live fetch is needed.
+
+    Set the env var ``METEO_EXAMPLES_OFFLINE=1`` to force the committed cache
+    everywhere (used in CI for deterministic, network-free notebook runs).
     """
+    if os.environ.get("METEO_EXAMPLES_OFFLINE"):
+        prefer_cache = True
     path = DATA_DIR / cache_name
     if prefer_cache and path.exists():
         return pd.read_csv(path, parse_dates=parse_dates)
@@ -163,6 +169,38 @@ def open_meteo_ensemble(lat, lon, start, end, variable="temperature_2m",
             member = 0 if key == variable else int(key.rsplit("member", 1)[-1])
             rows.append(pd.DataFrame({"time": time, "member": member, "value": vals}))
         return pd.concat(rows, ignore_index=True)
+
+    return _cached_csv(cache, build, prefer_cache=prefer_cache, parse_dates=["time"])
+
+
+# --------------------------------------------------------------------------- #
+# Marine wave forecast — Open-Meteo Marine API
+# --------------------------------------------------------------------------- #
+
+
+def open_meteo_marine(lat, lon, start, end, hourly="wave_height",
+                      prefer_cache=False):
+    """Archived marine wave forecast (Open-Meteo Marine API).
+
+    Returns columns: time (datetime, UTC) + one column per requested variable
+    (e.g. wave_height in m, wave_period in s). Use as the model side of a
+    significant-wave-height verification against buoys.
+    """
+    cache = f"openmeteo_marine_{lat:.2f}_{lon:.2f}_{pd.Timestamp(start):%Y%m%d}_" \
+            f"{pd.Timestamp(end):%Y%m%d}_{hourly.replace(',', '-')}.csv"
+
+    def build():
+        url = "https://marine-api.open-meteo.com/v1/marine"
+        params = {
+            "latitude": lat, "longitude": lon,
+            "start_date": str(pd.Timestamp(start).date()),
+            "end_date": str(pd.Timestamp(end).date()),
+            "hourly": hourly, "timezone": "UTC",
+        }
+        j = _get(url, params).json()["hourly"]
+        df = pd.DataFrame(j)
+        df["time"] = pd.to_datetime(df["time"])
+        return df
 
     return _cached_csv(cache, build, prefer_cache=prefer_cache, parse_dates=["time"])
 

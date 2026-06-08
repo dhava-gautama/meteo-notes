@@ -45,6 +45,21 @@ def continuous_metrics(fcst, obs):
     }
 
 
+def scatter_index(fcst, obs):
+    """Scatter Index — the standard normalized error metric for wave height.
+
+    SI = unbiased_RMSE / mean(obs), where unbiased_RMSE = sqrt(RMSE^2 - bias^2).
+    Rule of thumb: <10% excellent, 10-15% good, >20% needs investigation.
+    """
+    f, o = np.asarray(fcst, float), np.asarray(obs, float)
+    mask = ~(np.isnan(f) | np.isnan(o))
+    f, o = f[mask], o[mask]
+    bias = np.mean(f - o)
+    rmse = np.sqrt(np.mean((f - o) ** 2))
+    rmse_unbiased = np.sqrt(max(rmse ** 2 - bias ** 2, 0.0))
+    return rmse_unbiased / np.mean(o) if np.mean(o) > 0 else np.nan
+
+
 def partial_sums(fcst, obs):
     """SL1L2 partial sums for correct aggregation (matches MET SL1L2)."""
     f, o = np.asarray(fcst, dtype=float), np.asarray(obs, dtype=float)

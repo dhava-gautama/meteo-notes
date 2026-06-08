@@ -1,0 +1,60 @@
+name: CI
+
+# Keep the runnable examples green: run the test suite and execute every
+# notebook offline (against the committed cache) so they can't silently rot.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-and-notebooks:
+    runs-on: ubuntu-latest
+    env:
+      # Force the committed cache — no network during notebook execution.
+      METEO_EXAMPLES_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+          pip install pytest
+
+      - name: Unit tests
+        run: pytest -q
+
+      - name: Execute all notebooks (offline, committed cache)
+        run: |
+          shopt -s globstar nullglob
+          for nb in **/notebooks/*.ipynb; do
+            echo "::group::$nb"
+            jupyter nbconvert --to notebook --execute --inplace \
+              --ExecutePreprocessor.timeout=300 "$nb"
+            echo "::endgroup::"
+          done
+
+      - name: Fail if any notebook produced an error cell
+        run: |
+          python - <<'PY'
+          import glob, sys, nbformat
+          bad = []
+          for nb in glob.glob("**/notebooks/*.ipynb", recursive=True):
+              n = nbformat.read(nb, as_version=4)
+              for c in n.cells:
+                  if c.cell_type == "code" and any(
+                      o.get("output_type") == "error" for o in c.get("outputs", [])):
+                      bad.append(nb); break
+          if bad:
+              print("Notebooks with errors:", *bad, sep="\n  ")
+              sys.exit(1)
+          print("All notebooks executed cleanly.")
+          PY
