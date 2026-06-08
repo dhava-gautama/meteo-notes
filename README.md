@@ -21,7 +21,7 @@ Most guides have an executable Jupyter companion that runs end-to-end against
 
 - **Verification:** [point](verification/notebooks/01_point_verification.ipynb) · [categorical precip](verification/notebooks/02_categorical_precip.ipynb) · [ensemble CRPS](verification/notebooks/03_ensemble_crps.ipynb)
 - **Observations:** [surface QC](observations/notebooks/surface_obs_qc.ipynb) · [ocean/buoy access](observations/notebooks/ocean_obs_access.ipynb)
-- **Model output:** [WRF idealized supercell (real run)](models/notebooks/wrf_idealized_supercell.ipynb) · [WRF post-proc](models/notebooks/wrf_postprocessing.ipynb) · [SWAN idealized (real run)](models/notebooks/swan_idealized_fetch.ipynb) · [ROMS upwelling (real run)](models/notebooks/roms_upwelling.ipynb) · [CROCO basin (real run)](models/notebooks/croco_basin.ipynb) · [ROMS/CROCO post-proc](models/notebooks/roms_croco_output.ipynb) · [wave spectra](models/notebooks/wave_spectra.ipynb)
+- **Model output:** [WRF idealized supercell (real run)](models/notebooks/wrf_idealized_supercell.ipynb) · [WRF post-proc](models/notebooks/wrf_postprocessing.ipynb) · [SWAN idealized (real run)](models/notebooks/swan_idealized_fetch.ipynb) · [ROMS upwelling (real run)](models/notebooks/roms_upwelling.ipynb) · [CROCO basin (real run)](models/notebooks/croco_basin.ipynb) · [ROMS/CROCO post-proc](models/notebooks/roms_croco_output.ipynb) · [WW3 propagation (real run)](models/notebooks/ww3_propagation.ipynb) · [wave spectra](models/notebooks/wave_spectra.ipynb)
 
 ## Contents
 

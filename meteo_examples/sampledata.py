@@ -53,6 +53,16 @@ def croco_basin_path():
     """
     return _DATA / "croco_basin.nc"
 
+
+def ww3_propagation_path():
+    """Path to the committed *real* WAVEWATCH III propagation-test output.
+
+    A compact extract (Hs for 5 frames, mean period and direction) from an
+    actual WW3 ``ww3_tp2.2`` 2-D propagation regression test — see the WW3
+    guide's idealized-run section and ``models/notebooks/ww3_propagation.ipynb``.
+    """
+    return _DATA / "ww3_propagation.nc"
+
 # np.trapz was renamed to np.trapezoid in NumPy 2.0; support both.
 _trapz = getattr(np, "trapezoid", None) or np.trapz
 

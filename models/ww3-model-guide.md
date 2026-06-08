@@ -1096,25 +1096,36 @@ WW3 v6.07 with unstructured grids in E3SM:
 
 ## 13. Examples: Idealized Test and a Real-Data Run
 
-### 13a. Idealized case — the WW3 regression tests (no external data)
+### 13a. Idealized case — 2-D propagation regression test (no external data) ✅ verified
 
 WW3 ships a full regression-test suite under `regtests/` — self-contained cases
-that exercise propagation and the source terms with analytical input. They are
-the canonical "does my build work" check.
+that exercise propagation and the source terms with analytical input. The
+`ww3_tp2.2` 2-D propagation test below was **built and run** (CMake, gfortran 15
+/ conda-forge); the output is plotted in
+[`notebooks/ww3_propagation.ipynb`](notebooks/ww3_propagation.ipynb).
 
 ```bash
-cd regtests
-# 2-D propagation of a Gaussian hump on a flat domain:
-./bin/run_test -c <compiler> -w work -g 2dprop ../model ww3_tp2.2
-# source-term spin-up under constant wind:
-./bin/run_test -c <compiler> -w work ../model ww3_ts1
+# Modern CMake build — point at the repo ROOT (not model/); the switch
+# selects the physics (here: NOGRB SHRD PR3 UQ ... ST0 = serial, no sources):
+cmake -S . -B build -DSWITCH=$PWD/regtests/ww3_tp2.2/input/switch \
+      -DCMAKE_INSTALL_PREFIX=$PWD/install
+cmake --build build -j 4 && cmake --install build
+
+# run the chain in a work dir (LC_ALL=C for the locale):
+cd regtests/ww3_tp2.2 && mkdir work && cd work
+cp ../input/{2-D.depth,ww3_grid.inp,ww3_strt.inp,ww3_shel.inp,ww3_ounf.inp} .
+LC_ALL=C ww3_grid && ww3_strt && ww3_shel && ww3_ounf   # → ww3.YYYYMM.nc
 ```
 
-Each test runs `ww3_grid → ww3_strt → ww3_shel → ww3_ounf` and writes a NetCDF;
-`ww3_tp2.x` should advect the swell packet across the grid with the correct group
-velocity and no spurious dispersion. Read the spectral output with
-[`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb) (the `efth`
-variable).
+The full suite is automated by `regtests/bin/run_test` (legacy `w3_make`); the
+CMake path above is the modern build. Each test runs
+`ww3_grid → ww3_strt → ww3_shel → ww3_ounf`.
+
+**Measured result:** a 193×93 grid, 5 frames; the `Hs` packet (peak ~2.7 m)
+advects across the domain holding its shape — confirming the UQ propagation
+scheme is accurate and low-diffusion. Read gridded `hs/t01/dir` with the
+notebook; for spectra (`efth`) see
+[`notebooks/wave_spectra.ipynb`](notebooks/wave_spectra.ipynb).
 
 ### 13b. Worked example — Indonesian-seas regional hindcast
 
