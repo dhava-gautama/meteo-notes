@@ -2193,24 +2193,44 @@ gauges = {
 
 ## 17. Examples: Idealized Test and a Real-Data Run
 
-### 17a. Idealized case — barotropic test (no external data)
+### 17a. Build (verified ✅) and running a case
 
-The SCHISM source ships small verification cases in the `test/` and `Test_*`
-suites (e.g. a barotropic standing-wave / inundation case on a simple mesh).
-They need only the bundled mesh and a synthetic tide, so they confirm a build
-end-to-end in minutes.
+**Build — verified** with a conda-forge toolchain (gfortran 15 + OpenMPI +
+netCDF). SCHISM **bundles ParMETIS** (`src/ParMetis-4.0.3`), so you only need
+CMake, MPI, and netCDF:
 
 ```bash
-# Typical layout: hgrid.gr3, vgrid.in, param.nml, bctides.in all provided
-ln -s ../../bin/pschism .
-mpirun -np 4 ./pschism 4            # last arg = scribe (I/O) ranks
+conda create -n models --override-channels -c conda-forge \
+      gfortran gxx gcc netcdf-fortran hdf5 cmake openmpi
+conda activate models
+
+# cmake config (cmake/SCHISM.conda) — point compilers & netCDF at $CONDA_PREFIX:
+#   set(CMAKE_Fortran_COMPILER $ENV{CONDA_PREFIX}/bin/mpifort ...)
+#   set(NetCDF_FORTRAN_DIR $ENV{CONDA_PREFIX} ...)  /  set(TVD_LIM VL ...)
+mkdir build && cd build
+cmake -C ../cmake/SCHISM.conda ../src
+make -j4              # → bin/pschism_BLD_STANDALONE_TVD-VL
+```
+
+This produced a working `pschism` executable in ~3 min.
+
+**Running** needs a full input set — `hgrid.gr3` (unstructured mesh), `vgrid.in`,
+`param.nml`, `bctides.in` — which the main repo does **not** bundle as a small
+idealized case (the only bundled `.gr3` files are large operational domains). Get
+a runnable case from one of:
+- the **`schism_verification_tests`** suite (community-distributed),
+- **pyschism** / **OceanMesh2D** to generate your own mesh + forcing (see §13),
+- the BMKG/operational setup in §15b.
+
+Then:
+
+```bash
+mpirun -np 4 ./pschism_BLD_STANDALONE_TVD-VL 1   # last arg = scribe (I/O) ranks
 # → outputs/out2d_*.nc, schout_*.nc
 ```
 
-Check that the modelled elevation reproduces the prescribed tidal forcing.
-The 2-D/3-D NetCDF output reads with `xarray`; for SST/temperature sections the
-same indexing as [`notebooks/roms_croco_output.ipynb`](../models/notebooks/roms_croco_output.ipynb)
-applies once you map SCHISM's unstructured `nSCHISM_hgrid_node` dimension.
+The 2-D/3-D NetCDF output reads with `xarray`; map SCHISM's unstructured
+`nSCHISM_hgrid_node` dimension for plotting.
 
 ### 17b. Worked example — Sunda/Lombok Strait barotropic tides
 
