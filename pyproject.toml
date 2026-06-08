@@ -30,4 +30,4 @@ notebook = ["jupyter", "nbconvert", "ipykernel"]
 packages = ["meteo_examples"]
 
 [tool.setuptools.package-data]
-meteo_examples = ["data/*.csv"]
+meteo_examples = ["data/*.csv", "data/*.nc"]

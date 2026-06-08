@@ -2499,6 +2499,65 @@ To **verify** the forecast against Jakarta (`WIII`) observations, feed `T2` into
 
 ---
 
+## 14. Idealized Runs (no external data — runs on a laptop)
+
+The §13 worked example needs GFS data and an HPC. WRF's **idealized cases** are
+the opposite: they compile and run in minutes with *no download at all*, driven
+only by an `input_sounding`. They are the fastest way to confirm a build works
+and to teach the dynamics — and they produce real model output you can
+post-process immediately.
+
+### Available idealized cases
+
+| Case | What it is | Typical use |
+|---|---|---|
+| `em_quarter_ss` | Quarter-circle shear supercell | convective dynamics, microphysics |
+| `em_les` | Large-eddy simulation | boundary-layer turbulence |
+| `em_b_wave` | Baroclinic wave | mid-latitude cyclogenesis |
+| `em_seabreeze2d_x` | 2-D sea breeze | mesoscale circulations |
+| `em_hill2d_x` | 2-D flow over a hill | mountain waves |
+| `em_tropical_cyclone` | Idealized TC | hurricane structure |
+
+### Build & run (verified — `em_quarter_ss`, WRF v4.7.1)
+
+```bash
+cd WRFV4.7.1
+./configure                      # choose a serial or smpar (OpenMP) option
+./compile em_quarter_ss >& compile.log   # builds ideal.exe + wrf.exe
+
+cd test/em_quarter_ss
+./ideal.exe                      # → "SUCCESS COMPLETE IDEAL INIT", writes wrfinput_d01
+OMP_NUM_THREADS=8 ./wrf.exe      # → "SUCCESS COMPLETE WRF", writes wrfout_d01_0001-01-01_00:00:00
+```
+
+The default `namelist.input` only integrates **2 minutes** (one frame). For a
+developed storm set `run_minutes = 30` and `history_interval = 6` (six frames).
+
+**Measured run** (this guide's reference output, NVIDIA HPC SDK OpenMP build):
+
+| Metric | Value |
+|---|---|
+| Grid / Δx | 119 × 119 × 40, Δx = 1 km |
+| Time step | 12 s (150 steps for 30 min) |
+| Wall time | ≈ 16 min on 8 OpenMP threads (~6.4 s/step) |
+| Peak memory | ≈ 680 MB RSS |
+| Output | 6 frames, peak updraft **30 m/s**, max accumulated rain **7.9 mm** |
+
+> **Idealized ≠ real-data.** There is no geography, so `XLAT/XLONG` are zero and
+> surface diagnostics (`T2`, 10-m wind) are inactive — judge a supercell by its
+> **updraft, reflectivity, and rain**.
+
+### Post-process the real output
+
+The notebook [`notebooks/wrf_idealized_supercell.ipynb`](notebooks/wrf_idealized_supercell.ipynb)
+plots a compact extract of this exact run: the column-max updraft, the rain
+swath, a vertical `W` cross-section, and the storm's intensification over time.
+The surface-field notebook
+[`notebooks/wrf_postprocessing.ipynb`](notebooks/wrf_postprocessing.ipynb) is for
+real-data runs (§13) where `T2`/precip/10-m wind are meaningful.
+
+---
+
 ## References
 
 - [WRF Users Guide](https://www2.mmm.ucar.edu/wrf/users/wrf_users_guide/build/html/)

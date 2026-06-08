@@ -12,10 +12,24 @@ The domains are placed over Indonesian waters to match the guides.
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import xarray as xr
 
+_DATA = pathlib.Path(__file__).resolve().parent / "data"
 _RNG = np.random.default_rng(20240115)
+
+
+def wrf_idealized_path():
+    """Path to the committed *real* WRF output from the em_quarter_ss run.
+
+    A compact extract (column-max updraft, accumulated precip, a W
+    cross-section; 6 frames) from an actual WRFV4.7.1 ``em_quarter_ss``
+    idealized supercell run — see the WRF guide's idealized-run section and
+    ``models/notebooks/wrf_idealized_supercell.ipynb``.
+    """
+    return _DATA / "wrf_em_quarter_ss.nc"
 
 # np.trapz was renamed to np.trapezoid in NumPy 2.0; support both.
 _trapz = getattr(np, "trapezoid", None) or np.trapz

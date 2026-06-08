@@ -58,14 +58,17 @@ ensembles), [NDBC](https://www.ndbc.noaa.gov/) (marine buoys).
 | [`observations/notebooks/surface_obs_qc.ipynb`](observations/notebooks/surface_obs_qc.ipynb) | Pull ASOS, run range/spike/consistency QC, visualize flags — backs [`surface-obs-guide.md`](observations/surface-obs-guide.md) | live |
 | [`observations/notebooks/ocean_obs_access.ipynb`](observations/notebooks/ocean_obs_access.ipynb) | NDBC buoy wave/SST access & QC (+ optional Argo/utide) — backs [`ocean-obs-guide.md`](observations/ocean-obs-guide.md) | live |
 
-### Model post-processing (synthetic sample output)
-| Notebook | What it does |
-|---|---|
-| [`models/notebooks/wrf_postprocessing.ipynb`](models/notebooks/wrf_postprocessing.ipynb) | Open a `wrfout`, plot T2/precip/10-m wind, derive period precip |
-| [`models/notebooks/roms_croco_output.ipynb`](models/notebooks/roms_croco_output.ipynb) | Open a ROMS/CROCO history file, plot SST, vertical section |
-| [`models/notebooks/wave_spectra.ipynb`](models/notebooks/wave_spectra.ipynb) | Plot a 2-D directional wave spectrum, integrate to Hs |
+### Model post-processing
+| Notebook | What it does | Data |
+|---|---|---|
+| [`models/notebooks/wrf_idealized_supercell.ipynb`](models/notebooks/wrf_idealized_supercell.ipynb) | **Real** output from a WRF `em_quarter_ss` idealized run: updraft, rain swath, vertical W section, intensification | real (committed extract) |
+| [`models/notebooks/wrf_postprocessing.ipynb`](models/notebooks/wrf_postprocessing.ipynb) | Open a `wrfout`, plot T2/precip/10-m wind, derive period precip | synthetic |
+| [`models/notebooks/roms_croco_output.ipynb`](models/notebooks/roms_croco_output.ipynb) | Open a ROMS/CROCO history file, plot SST, vertical section | synthetic |
+| [`models/notebooks/wave_spectra.ipynb`](models/notebooks/wave_spectra.ipynb) | Plot a 2-D directional wave spectrum, integrate to Hs | synthetic |
 
-> The model notebooks generate their sample NetCDF on first run via
-> `meteo_examples.sampledata`. The variable names, dimensions, and attributes
-> match real output, so the same code works on your actual WRF/ROMS/SWAN files —
-> just point `xr.open_dataset()` at them instead.
+> The `wrf_idealized_supercell` notebook uses a committed extract of **real**
+> output from a WRF `em_quarter_ss` run (see the WRF guide's idealized-run
+> section). The other model notebooks generate a synthetic sample NetCDF on first
+> run via `meteo_examples.sampledata`; the variable names, dimensions, and
+> attributes match real output, so the same code works on your actual
+> WRF/ROMS/SWAN files — just point `xr.open_dataset()` at them instead.
